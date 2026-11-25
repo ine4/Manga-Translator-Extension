@@ -544,7 +544,11 @@ function bindLocalControls(): void {
     qs<HTMLButtonElement>(id).addEventListener('click', async () => {
       localStatus.textContent = 'Updating model residency...';
       try {
-        if (type !== 'LOCAL_RELEASE') localEnabled.checked = true;
+        if (type !== 'LOCAL_RELEASE' && !localEnabled.checked) {
+          localEnabled.checked = true;
+          settings = collectAllSettings();
+          renderLanguageSelects();
+        }
         await autoSave();
         const result = await chrome.runtime.sendMessage({ type }) as LocalStatus;
         if (result.error) throw new Error(result.error);

@@ -27,8 +27,6 @@ class Settings(BaseSettings):
         "http://localhost:7677",
         "http://127.0.0.1",
         "http://127.0.0.1:7677",
-        "http://192.168.1.231",
-        "http://192.168.1.231:7677",
     ]
 
     class Config:

@@ -18,15 +18,21 @@ echo 1. Lightweight setup, no Flux model
 echo 2. Download optional Flux Klein 4B model
 echo 3. Remove local Flux model cache
 echo 4. Exit
+echo 5. Install built-in Local AI (Rust, CUDA, Qwen3-VL 4B)
 echo.
-set /p "CHOICE=Choose an option [1-4]: "
+set /p "CHOICE=Choose an option [1-5]: "
 
 if "%CHOICE%"=="1" goto lightweight
 if "%CHOICE%"=="2" goto install_flux
 if "%CHOICE%"=="3" goto remove_flux
 if "%CHOICE%"=="4" goto done
+if "%CHOICE%"=="5" goto local_ai
 
 echo Invalid choice.
+goto done
+
+:local_ai
+call "%~dp0setup-local-ai.bat"
 goto done
 
 :lightweight

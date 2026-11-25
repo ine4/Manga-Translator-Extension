@@ -150,7 +150,7 @@ impl Runtime {
                 return Err(unavailable("CUDA inference engine exited during model load"));
             }
             // Wait for actual model readiness, then verify this is our authenticated worker.
-            let ready = self.client.get(format!("{WORKER}/health")).timeout(Duration::from_secs(2))
+            let ready = self.client.get(format!("{WORKER}/health")).bearer_auth(&key).timeout(Duration::from_secs(2))
                 .send().await.map(|r| r.status().is_success()).unwrap_or(false);
             if !ready { sleep(Duration::from_millis(250)).await; continue; }
             if let Ok(r) = self.client.get(format!("{WORKER}/v1/models"))

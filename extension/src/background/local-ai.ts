@@ -5,7 +5,7 @@ const ROOT = 'http://127.0.0.1:7678';
 const SESSION = 'manga_local_session';
 const ALARM = 'manga-local-reconcile';
 const SETTINGS = 'manga_translator_settings';
-type Pins = { id: string; hosts: string[]; windows: number[] };
+export type Pins = { id: string; hosts: string[]; windows: number[] };
 
 export function effectiveBackend(settings: AppSettings): string {
   return settings.localAiEnabled ? 'http://127.0.0.1:7677' : settings.backendUrl;
@@ -53,12 +53,18 @@ function ordered<T>(op: () => Promise<T>): Promise<T> {
   tail = next.catch(() => undefined);
   return next;
 }
+export function prunePins(pins: Pins, tabs: Array<{url?: string; windowId: number}>, enabled: boolean): Pins {
+  const hosts = new Set(tabs.map(tab => hostname(tab.url)).filter(Boolean));
+  const windows = new Set(tabs.map(tab => tab.windowId));
+  return {
+    id: pins.id,
+    hosts: enabled ? pins.hosts.filter(host => hosts.has(host)) : [],
+    windows: enabled ? pins.windows.filter(windowId => windows.has(windowId)) : [],
+  };
+}
+
 async function reconcile(settings: AppSettings, pins: Pins, tabs?: chrome.tabs.Tab[]): Promise<Record<string, unknown>> {
-  const open = tabs ?? await chrome.tabs.query({});
-  const hosts = new Set(open.map(tab => hostname(tab.url)).filter(Boolean));
-  const windows = new Set(open.map(tab => tab.windowId));
-  pins.hosts = settings.localAiEnabled ? pins.hosts.filter(host => hosts.has(host)) : [];
-  pins.windows = settings.localAiEnabled ? pins.windows.filter(windowId => windows.has(windowId)) : [];
+  pins = prunePins(pins, tabs ?? await chrome.tabs.query({}), settings.localAiEnabled);
   const keep = pins.hosts.length > 0 || pins.windows.length > 0;
   await savePins(pins);
   if (keep) {

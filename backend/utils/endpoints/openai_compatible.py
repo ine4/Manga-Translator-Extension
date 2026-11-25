@@ -169,7 +169,7 @@ def call_openai_compatible_endpoint(
 
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code
-            error_text = e.response.text[:500]
+            error_text = "Local inference error" if base_url.rstrip('/') == 'http://127.0.0.1:7678/v1' else e.response.text[:500]
 
             if status_code == 429 and attempt < max_retries:
                 log_message(

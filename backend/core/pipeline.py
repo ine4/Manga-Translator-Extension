@@ -631,7 +631,7 @@ def translate_and_render(
 
     panels = None
     debug_panels = None
-    if config.detection.use_panel_sorting or False:
+    if config.detection.use_panel_sorting:
         try:
             log_message(
                 "Detecting panels...",
