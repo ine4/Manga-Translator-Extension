@@ -2,6 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hostname, prunePins, effectiveBackend, effectiveRequest, localControlSender } from '../src/background/local-ai.ts';
 import { DEFAULT_SETTINGS } from '../src/shared/types.ts';
+import { usableImageUrl } from '../src/shared/image-url.ts';
+
+test('scanner accepts a direct image document without accepting empty HTML image links', () => {
+  const url = 'https://reader.example/page.jpg';
+  assert.equal(usableImageUrl(url, url, 'image/jpeg'), true);
+  assert.equal(usableImageUrl(url, url, 'text/html'), false);
+  assert.equal(usableImageUrl(url, 'https://reader.example/chapter', 'text/html'), true);
+  for (const invalid of [null, undefined, '', 'blob:synthetic', 'data:image/png;base64,synthetic']) {
+    assert.equal(usableImageUrl(invalid, url, 'image/jpeg'), false);
+  }
+});
 
 test('local controls accept only the extension-owned popup document', () => {
   assert.equal(localControlSender({id:'self',url:'chrome-extension://self/popup/index.html'},'self'),true);
