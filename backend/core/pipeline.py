@@ -477,6 +477,7 @@ def translate_and_render(
     ocr_texts_out: Optional[List[str]] = None,
     image_override: Optional[Image.Image] = None,
     bubble_results_out: Optional[List[Dict[str, Any]]] = None,
+    progress: Optional[Callable[[int, str], None]] = None,
 ):
     """
     Main function to translate manga speech bubbles and render translations using a config object.
@@ -666,6 +667,8 @@ def translate_and_render(
         if config.detection.use_panel_sorting:
             panels = debug_panels
 
+    if progress is not None:
+        progress(3, "Cleaning and preparing crops")
     # Process outside text detection and inpainting (bubble-aware)
     pil_image_processed, outside_text_data = process_outside_text(
         pil_image_processed,
@@ -1081,6 +1084,8 @@ def translate_and_render(
                     if "image_b64" in bubble and "mime_type" in bubble
                 ]
                 translated_texts = []
+                if progress is not None:
+                    progress(4, "Translating text regions")
                 _provider_tag = f"[{config.translation.provider}:"
                 if not bubble_images_b64:
                     log_message("No valid bubbles after sorting", always_print=True)
@@ -1201,6 +1206,8 @@ def translate_and_render(
                         if bubble_images_b64 and not valid_translations:
                             raise TranslationError("All bubbles failed.")
 
+                if progress is not None:
+                    progress(5, "Rendering translations")
                 # Render Translations
                 bubble_render_info_map = {
                     tuple(info["bbox"]): {

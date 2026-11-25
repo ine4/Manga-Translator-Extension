@@ -1,5 +1,9 @@
 import type { AppSettings, TranslateRequest } from '../shared/types.js';
 import { usableImageUrl } from '../shared/image-url.js';
+import type { TranslationProgress } from '../shared/progress.js';
+import { progressLabel } from '../shared/progress-label.js';
+
+const progressListeners = new Map<string, (progress: TranslationProgress) => void>();
 
 const ROOT_ID  = 'mt-scanner-root';
 const STYLE_ID = 'mt-scanner-style';
@@ -186,6 +190,10 @@ function normalizeUiLanguage(language: unknown): UiLanguage {
 // ─────────────────────────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
+  if (msg.type === 'TRANSLATION_PROGRESS' && _sender.id === chrome.runtime.id) {
+    progressListeners.get(msg.requestId)?.(msg.progress);
+    return false;
+  }
   if (msg.type === 'PING') { send({ ok: true }); return false; }
   if (msg.type === 'OPEN_SCANNER') {
     void openScanner().then(() => send({ ok: true })).catch((e) => send({ ok: false, error: String(e) }));
@@ -266,6 +274,35 @@ const AUTO_SCAN_LIMIT = 250;
 const LAZY_IMAGE_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-srcset', 'data-lazy', 'data-image'] as const;
 const AUTO_RETRY_MAP = new Map<string, number>(); // url -> retry count
 const AUTO_RETRY_MAX = 3;
+let autoProgress: TranslationProgress = { completed: 0, total: 8, stage: 'Waiting for images' };
+let autoProgressStarted = 0;
+let autoProgressElapsed = 0;
+let autoProgressTimer: number | undefined;
+
+function paintAutoProgress(): void {
+  if (autoProgressTimer !== undefined) autoProgressElapsed = (performance.now() - autoProgressStarted) / 1000;
+  const label = document.getElementById('mt-auto-progress');
+  if (label) label.textContent = progressLabel(autoProgress, autoProgressElapsed);
+  const bar = document.querySelector<HTMLProgressElement>('#mt-auto-bar');
+  if (bar) { bar.max = autoProgress.total; bar.value = autoProgress.completed; }
+}
+
+function beginAutoProgress(): void {
+  if (autoProgressTimer !== undefined) clearInterval(autoProgressTimer);
+  autoProgress = { completed: 0, total: 8, stage: 'Fetching image' };
+  autoProgressStarted = performance.now();
+  autoProgressElapsed = 0;
+  paintAutoProgress();
+  autoProgressTimer = window.setInterval(paintAutoProgress, 250);
+}
+
+function finishAutoProgress(stage: string, complete = false): void {
+  if (complete) autoProgress.completed = autoProgress.total;
+  autoProgress.stage = stage;
+  paintAutoProgress();
+  if (autoProgressTimer !== undefined) clearInterval(autoProgressTimer);
+  autoProgressTimer = undefined;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-translate: start / stop
@@ -273,8 +310,10 @@ const AUTO_RETRY_MAX = 3;
 
 async function startAutoTranslate(): Promise<void> {
   if (autoTranslateActive) return;
+  if (currentShadow) { scannerPausedAutoTranslate = true; return; }
   await refreshUiLanguage();
   autoTranslateActive = true;
+  AUTO_RETRY_MAP.clear();
   if (autoTranslateRemoveUiTimer !== undefined) {
     clearTimeout(autoTranslateRemoveUiTimer);
     autoTranslateRemoveUiTimer = undefined;
@@ -402,6 +441,8 @@ function handleAutoTranslateImage(img: HTMLImageElement, force = false): void {
   const cached = translatedCache.get(url);
   if (cached) {
     applyTranslatedImage(img, `data:image/png;base64,${cached}`, url);
+    updateAutoTranslateCounter();
+    if (autoTranslateConcurrent === 0) finishAutoProgress('Already translated', true);
     if (isNearViewport(img)) queueAutoTranslateLookahead(img);
     return;
   }
@@ -466,6 +507,7 @@ function collectAutoTranslateImageEntries(root: ParentNode): Array<{ img: HTMLIm
 
 function stopAutoTranslate(preserveScannerResume = false): void {
   autoTranslateActive = false;
+  finishAutoProgress('Stopped');
   if (!preserveScannerResume) scannerPausedAutoTranslate = false;
   autoTranslateQueue = [];
   autoTranslateQueuedUrls = new Set();
@@ -510,7 +552,7 @@ function resolveMangaUrl(img: HTMLImageElement): string | null {
   if (w > 0 && h > 0 && (w < 150 || h < 100)) return null;
   if (w === 0 && h === 0 && renderedW > 0 && renderedW < 150) return null;
 
-  const src = resolveLazyAttributeSrc(img) ?? img.currentSrc ?? img.src;
+  const src = resolveLazyAttributeSrc(img) ?? (img.currentSrc || img.src);
   if (!isUsableImageUrl(src)) return null;
 
   // Skip common non-manga images
@@ -542,7 +584,10 @@ async function processAutoTranslateQueue(): Promise<void> {
     }
     autoTranslateInFlightUrls.add(item.url);
     autoTranslateConcurrent++;
-    void translateAndApply(item.img, item.url).finally(() => {
+    void translateAndApply(item.img, item.url).catch(error => {
+      AUTO_RETRY_MAP.set(item.url, (AUTO_RETRY_MAP.get(item.url) ?? 0) + 1);
+      if (autoTranslateActive) finishAutoProgress(error instanceof Error ? error.message : 'Translation failed');
+    }).finally(() => {
       autoTranslateInFlightUrls.delete(item.url);
       autoTranslateConcurrent--;
       autoTranslateProcessing = false;
@@ -562,26 +607,30 @@ async function translateAndApply(img: HTMLImageElement, url: string): Promise<vo
 
   updateAutoTranslateCounter();
 
+  beginAutoProgress();
+
   const pageUrl = window.location.href;
   const imgData = await fetchImageData(url, pageUrl);
   if (!autoTranslateActive) return;
   if (!imgData) {
-    AUTO_RETRY_MAP.set(url, retries + 1);
-    return;
+    throw new Error('Image could not be fetched');
   }
 
   const settings = await loadSettings();
   const body = buildTranslateRequest(imgData, settings);
-  const result = await bgTranslateImageWithBody(url, pageUrl, body);
+  const result = await bgTranslateImageWithBody(url, pageUrl, body, progress => {
+    if (!autoTranslateActive) return;
+    autoProgress = progress;
+    paintAutoProgress();
+  });
   if (!autoTranslateActive) return;
 
   if (result.error) {
-    AUTO_RETRY_MAP.set(url, retries + 1);
-    return;
+    throw new Error(result.error);
   }
 
   if (!result.translated_image) {
-    return;
+    throw new Error('Backend returned no translated image');
   }
 
   const translatedB64 = result.translated_image;
@@ -594,6 +643,7 @@ async function translateAndApply(img: HTMLImageElement, url: string): Promise<vo
   applyTranslatedImage(img, dataUrl, url);
   if (isNearViewport(img)) queueAutoTranslateLookahead(img);
   updateAutoTranslateCounter();
+  finishAutoProgress('Complete', true);
 }
 
 function applyTranslatedImage(img: HTMLImageElement, dataUrl: string, rawUrl?: string): void {
@@ -851,6 +901,8 @@ function injectAutoTranslateUI(): void {
       <div class="mt-auto-dot"></div>
       <span class="mt-auto-label">${tr('autoMt')}</span>
       <span class="mt-auto-count" id="mt-auto-count">0</span>
+      <span id="mt-auto-progress" role="status">Waiting for images · 0% · 0.0s</span>
+      <progress id="mt-auto-bar" max="8" value="0" aria-label="Completed translation steps"></progress>
       <button class="mt-auto-stop" id="mt-auto-stop">${tr('stop')}</button>
     </div>
   `;
@@ -861,6 +913,7 @@ function injectAutoTranslateUI(): void {
     event.preventDefault();
     event.stopPropagation();
     stopAutoTranslate();
+    void chrome.runtime.sendMessage({ type: 'SET_SITE_AUTO', enabled: false });
   }, true);
 
   const style = document.createElement('style');
@@ -873,6 +926,7 @@ function injectAutoTranslateUI(): void {
     }
     .mt-auto-indicator {
       display: flex; align-items: center; gap: 8px;
+      flex-wrap: wrap; max-width: calc(100vw - 76px);
       background: rgba(6,10,24,0.96); border: 1px solid rgba(59,130,246,0.25);
       border-radius: 99px; padding: 8px 14px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
@@ -890,6 +944,8 @@ function injectAutoTranslateUI(): void {
     }
     .mt-auto-label { color: #60a5fa; }
     .mt-auto-count { color: #4ade80; min-width: 24px; }
+    #mt-auto-progress { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+    #mt-auto-bar { width: 72px; height: 8px; accent-color: #4ade80; }
     .mt-auto-stop {
       background: rgba(220,38,38,0.15); color: #f87171;
       border: 1px solid rgba(220,38,38,0.3);
@@ -940,11 +996,17 @@ function updateAutoTranslateCounter(): void {
 // Background helpers (bypass CORS)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function bgTranslateImageWithBody(imageUrl: string, pageUrl: string, body: TranslateRequest): Promise<{ translated_image?: string; bubbles?: unknown[]; processing_time_seconds?: number; error?: string }> {
+function bgTranslateImageWithBody(imageUrl: string, pageUrl: string, body: TranslateRequest, update?: (progress: TranslationProgress) => void): Promise<{ translated_image?: string; bubbles?: unknown[]; processing_time_seconds?: number; error?: string }> {
   return new Promise((resolve) => {
-    const tid = setTimeout(() => resolve({ error: 'Backend timeout after 5 minutes' }), 300_000);
-    chrome.runtime.sendMessage({ type: 'TRANSLATE_IMAGE_WITH_BODY', imageUrl, pageUrl, body }, (resp: unknown) => {
+    const requestId = crypto.randomUUID();
+    if (update) progressListeners.set(requestId, update);
+    const tid = setTimeout(() => {
+      progressListeners.delete(requestId);
+      resolve({ error: 'Backend timeout after 5 minutes' });
+    }, 300_000);
+    chrome.runtime.sendMessage({ type: 'TRANSLATE_IMAGE_WITH_BODY', imageUrl, pageUrl, body, requestId }, (resp: unknown) => {
       clearTimeout(tid);
+      progressListeners.delete(requestId);
       const lastError = chrome.runtime.lastError;
       if (lastError) {
         resolve({ error: `extension error: ${lastError.message}` });

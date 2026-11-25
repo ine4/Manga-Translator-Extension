@@ -36,6 +36,7 @@ The runtime and weights are ignored by git. No model binaries are in this PR. Th
 |---|---|
 | Startup / no request | Controller running, translator weights on SSD, no inference worker |
 | Translate a page | Acquire page lease, load selected model into CUDA VRAM, detect source language if Auto, run all image crops, release after page finishes |
+| Auto-translate reading session | The Auto-translate button enables this exact hostname for the browser session and keeps the selected Local AI model in VRAM. It resumes on same-host navigation and matching tabs/windows. Stop disables it for that site; leaving the final matching tab releases its lease. Existing detector models remain warm in the Python backend |
 | Site pin | Click Keep in VRAM while this site is open. Keep model loaded while any tab in any window has the same exact hostname; paths and query strings are irrelevant |
 | Window pin | Click Keep in VRAM while this window is open. Keep while any tab remains in that window |
 | Last matching tab/window closes or navigates away | Browser releases lease; after any running page finishes the worker exits and its model VRAM is freed |
@@ -44,7 +45,13 @@ The runtime and weights are ignored by git. No model binaries are in this PR. Th
 | Multiple models | Only one worker is resident; conflicting active model requests fail explicitly instead of thrashing |
 | Disable Local AI | Clears browser pins and returns to configured BYO-cloud workflow |
 
-Site/window selections are stored in Chrome's volatile storage.session (not storage.local) so Manifest V3 service worker suspension does not lose them. Browser session restart clears them. The controller sees only a random lease ID, selected model ID and keep/release boolean. No URL, hostname or browsing history is sent to the controller. The tabs permission is needed to see matching tabs across all windows; alarms refresh the lease at 30-second intervals. An active page owns a separate lease so closing a reader cannot interrupt its in-flight request. Chrome suspended/asleep or overloaded inference can delay lease reconciliation; qualify with actual multi-tab tests.
+Auto-translate site intent and site/window selections are stored in Chrome's volatile storage.session (not storage.local) so Manifest V3 service worker suspension does not lose them. Browser session restart clears them. The controller sees only a random lease ID, selected model ID and keep/release boolean. No URL, hostname or browsing history is sent to the controller. The tabs permission is needed to see matching tabs across all windows; alarms refresh the lease at 30-second intervals. An active page owns a separate lease so closing a reader cannot interrupt its in-flight request. Chrome suspended/asleep or overloaded inference can delay lease reconciliation; qualify with actual multi-tab tests.
+
+## Progress and language detection
+
+Local Auto-translate shows the current backend stage, completed-step percentage, progress bar and elapsed seconds. The eight steps cover model readiness, language selection, detection, crop preparation, translation, rendering, encoding and applying the result. These are completed-work milestones, not a prediction of time remaining or GPU token completion. The clock runs while a stage is busy and stops when complete, stopped or failed. The existing single/batch JSON endpoints remain available; Local Auto-translate uses a request-memory NDJSON stream at `/translate/stream`.
+
+Auto source detection is an additional local AI vision request. Python prepares a thumbnail and Qwen identifies the language and reading direction through the Rust/llama.cpp service. Explicit source selection skips that request. No OCR-only heuristic or cloud detector is substituted.
 
 ## Windows model manager
 

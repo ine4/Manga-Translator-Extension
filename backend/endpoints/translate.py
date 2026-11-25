@@ -1,9 +1,11 @@
 """FastAPI translation endpoints."""
 import asyncio
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from api_schemas import (
     TranslateBatchItem,
@@ -45,6 +47,10 @@ def _build_bubble_info(bubbles: list[dict]) -> list:
 
 @router.post("/translate", response_model=TranslateResponse)
 async def translate_single(req: TranslateRequest) -> TranslateResponse:
+    return await _translate_request(req)
+
+
+async def _translate_request(req: TranslateRequest, progress=None) -> TranslateResponse:
     """Translate a single image.
 
     Accepts a base64-encoded image and returns the translated image
@@ -81,11 +87,16 @@ async def translate_single(req: TranslateRequest) -> TranslateResponse:
 
     start = time.time()
     try:
-        result_image, bubbles, elapsed = await asyncio.to_thread(translate_image_base64, req.image, config)
+        if progress is None:
+            result_image, bubbles, elapsed = await asyncio.to_thread(translate_image_base64, req.image, config)
+        else:
+            result_image, bubbles, elapsed = await asyncio.to_thread(translate_image_base64, req.image, config, progress)
     except Exception as e:
         raise HTTPException(status_code=503 if req.provider == "Local" else 500, detail="Local translation failed; check model installation and controller." if req.provider == "Local" else "Translation failed.") from e
 
     translated_b64 = image_to_base64_raw(result_image)
+    if progress is not None:
+        progress(7, "Displaying result")
 
     return TranslateResponse(
         translated_image=translated_b64,
@@ -95,6 +106,35 @@ async def translate_single(req: TranslateRequest) -> TranslateResponse:
         target_language=req.output_language,
         provider=req.provider,
     )
+
+
+@router.post("/translate/stream")
+async def translate_stream(req: TranslateRequest):
+    """Request-memory progress only; percentages count completed pipeline steps."""
+    async def events():
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue()
+        def progress(completed, stage):
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "type": "progress", "completed": completed, "total": 8, "stage": stage,
+            })
+        async def run():
+            try:
+                result = await _translate_request(req, progress)
+                loop.call_soon(queue.put_nowait, {"type": "result", "result": result.model_dump()})
+            except Exception:
+                await queue.put({"type": "error", "error": "Translation failed; check model and backend status."})
+        # A disconnected reader cannot cancel its thread or its page lease.
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                event = await queue.get()
+                yield json.dumps(event, separators=(",", ":")) + "\n"
+                if event["type"] != "progress":
+                    break
+        finally:
+            await asyncio.shield(task)
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
 
 def _translate_single_item(

@@ -257,12 +257,14 @@ function bind(): void {
       if (!injected) throw new Error(t(uiLanguage, 'errorInjectContent'));
       if (autoBtn.classList.contains('active')) {
         setStatus(t(uiLanguage, 'statusStoppingAuto'), '');
-        await chrome.tabs.sendMessage(tab.id, { type: 'STOP_AUTO_TRANSLATE' });
+        const result = await chrome.runtime.sendMessage({ type: 'SET_SITE_AUTO', enabled: false });
+        if (result?.error) throw new Error(result.error);
         setStatus(t(uiLanguage, 'statusAutoStopped'), 'ok');
         setAutoButtonState(false);
       } else {
         setStatus(t(uiLanguage, 'statusStartingAuto'), '');
-        await chrome.tabs.sendMessage(tab.id, { type: 'START_AUTO_TRANSLATE' });
+        const result = await chrome.runtime.sendMessage({ type: 'SET_SITE_AUTO', enabled: true });
+        if (result?.error) throw new Error(result.error);
         setStatus(t(uiLanguage, 'statusAutoActive'), 'ok');
         setAutoButtonState(true);
       }

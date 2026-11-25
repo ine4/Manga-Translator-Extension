@@ -34,9 +34,9 @@ SHA-256 values:
 | Q4_K_M weights | `66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a` |
 | Q8_0 projector | `30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d` |
 | Cargo.lock | `02c41fddab1ed50f5eedd7a6b5b596939c1ef4c90400071fb1b4352713d973fc` |
-| Built extension background JS | `9ef90ad9efc4879637082ac86e66a4af9a55e225fb7b311060c605e0e3354d8b` |
-| Built extension content script JS | `623babb68aa0ea2964e316e80b603edae72409eb8594118a8aab5616d8db6e4f` |
-| Built extension popup JS | `1664e8e69e8929addb158b104225da977ed52d436135a23304bb3bd1b33993ab` |
+| Built extension background JS | `77b5d09143c7ff36ea3fb1041d8629b3c7df75ec217786e9e6e99425e84fdb24` |
+| Built extension content script JS | `ab6e7cd8c1d0dcb8535008adda995ceee7cdfc46dcf9f5619326d04f86dc2648` |
+| Built extension popup JS | `70623481fc00ce3fe872b71360e6e1bd33618ce3d1e0de12c5ff69a9e1c7161b` |
 
 Both release archives passed the installer's pinned hash checks before extraction.
 Weights and runtime files remain ignored; no binary assets are committed.
@@ -117,3 +117,18 @@ The optional outside-text detector was downloaded after the owner approved its g
 These generated fixtures verify known short translations, not general manga translation quality. Edge, other GPUs/drivers, true suspended/asleep browser scheduling and forced inference-timeout duration were not separately qualified. The installed NVIDIA driver was retained. OS pagefiles, crash dumps, browser-native caches and website behavior remain outside the application privacy guarantee.
 
 Production npm audit reported zero advisories; five development-tooling advisories remain (one moderate, four high). No real images were sent to a cloud provider. No model/runtime binaries or generated page artifacts are committed.
+
+
+## Auto-translate reading-session follow-up
+
+The owner requested that Auto-translate keep the model resident and remain enabled while reading on the same site. Site intent now lives in storage.session as autoHosts; the existing random browser lease represents the combined manual and Auto demand. The controller still receives no hostname or history. Same-host navigation and other matching tabs/windows receive the content script and resume automatically. Turning off Auto or the page Stop button removes that site's Auto demand; unrelated manual/GUI pins remain independent. The detectors remain loaded in the existing backend process.
+
+The backend adds a request-memory progress stream while preserving single/batch response formats. Events contain stage names and completed-step counters only until the final response. The UI derives the percentage from eight completed pipeline steps and shows elapsed seconds through waits/model loading; it does not fabricate token progress or ETA. Errors do not report 100%. Re-enabling an already translated in-memory page shows Already translated / 100% and a frozen last-page time. No progress, image or site data is written to persistent storage.
+
+Validation passed: full existing test script (4 Rust, compilation, 14 Python backend, 4 catalog and static guards), followed by the final production build and 9 TypeScript tests. Added checks cover chunk-split NDJSON, sanitized stream errors, path-output rejection on the stream endpoint, exact-host intent pruning, controller payload privacy and cloud Auto without a local controller. A final backend test run also passed after the stream validation test update.
+
+Live Chrome tests used only generated pages in RAM. The final built extension was loaded and visually inspected; a completed page showed translated bubbles, the progress bar, 100% (8/8 steps), elapsed time and Stop without clipping. Intermediate events advanced through queue/loading, language, detection, preparation, translation, rendering and encoding. The worker remained resident after completion. Same-host navigation completed automatically; worker PID 26716 was unchanged across the final navigation check. Earlier matching-tab/window checks kept worker PID 27760 alive when the first reader closed. Stop released the Auto demand; leaving the final hostname unloaded the worker and left zero leases. Closing the final reader at the detection stage let its in-flight streaming page finish and then released all leases. Persistent extension storage contained only settings; extension IndexedDB and Cache Storage were empty. The final build was also reloaded into the owner's regular Chrome and its live progress indicator was observed.
+
+Individual elapsed observations on generated pages: initial model-process load plus page 10.9 s and 13.2 s in separate runs; subsequent pinned same-host pages 3.7–4.1 s. These are not cache-cold benchmarks or guarantees. Before this feature, a separate two-bubble profile measured first-use detection/panel work 5.82 s, language AI 0.69 s, translation call 1.61 s and rendering 1.10 s (9.52 s total). Warm explicit-source runs measured 2.93 s with full-page context and 1.87 s without; this comparison does not establish equal translation quality.
+
+Selective Rust rewrites were considered. Existing detector/image/render calls already use native PyTorch/OpenCV/Skia libraries, and inference already uses native CUDA. The measurements did not justify replacing the Python pipeline in this batch. Avoiding repeated worker loads is the implemented performance change. Request-scoped preprocessing overlap and moving lifecycle/status work off the inference-held mutex remain candidates for separately measured changes; neither is claimed implemented here. The prior Process Monitor waiver and translation-quality limitations still apply.
