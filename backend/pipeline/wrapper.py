@@ -386,6 +386,7 @@ def image_to_base64_raw(image: Image.Image, fmt: str = "PNG") -> str:
 def translate_image_base64(
     image_b64: str,
     config: MangaTranslatorConfig,
+    progress=None,
 ) -> tuple[Image.Image, list[dict[str, Any]], float]:
     """Process the entire API page in RAM; never create a page or crop file."""
     from contextlib import nullcontext
@@ -393,6 +394,10 @@ def translate_image_base64(
     from core.pipeline import translate_and_render
 
     start = time.monotonic()
+    def report(completed, stage):
+        if progress is not None:
+            progress(completed, stage)
+    report(0, "Waiting for page queue")
     with _page_lock:
         try:
             with base64_to_image(image_b64) as pil_image:
@@ -400,19 +405,24 @@ def translate_image_base64(
                 bubbles: list[dict[str, Any]] = []
                 managed = config.translation.local_managed
                 lease = page_lease(config.translation.model_name) if managed else nullcontext()
+                report(0, "Loading model" if managed else "Preparing page")
                 with lease:
+                    report(1, "Identifying language" if managed and config.translation.input_language == "Auto" else "Preparing detection")
                     if managed and config.translation.input_language == "Auto":
                         language, direction = detect_page_language(pil_image, config.translation.model_name)
                         config.translation.input_language = language
                         config.translation.reading_direction = direction
+                    report(2, "Detecting text regions")
                     result = translate_and_render(
                         image_path=None, config=config, output_path=None,
                         image_override=pil_image,
                         bubble_results_out=bubbles,
+                        progress=report,
                     )
                     if not isinstance(result, Image.Image):
                         raise RuntimeError("Translation did not return an image")
                     translated_image = result.copy()
+                    report(6, "Encoding result")
             return translated_image, bubbles, time.monotonic() - start
         finally:
             # Global pipeline caches are request-scoped for the HTTP API.

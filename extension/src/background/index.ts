@@ -1,11 +1,17 @@
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/types.js';
 import type { TranslateRequest, TranslateResponse } from '../shared/types.js';
 import { normalizeUiLanguage } from '../shared/i18n.js';
+import { readTranslationStream, type TranslationProgress } from '../shared/progress.js';
 
-import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender } from './local-ai.js';
+import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender, setSiteAuto } from './local-ai.js';
 
 const STORAGE_KEY = 'manga_translator_settings';
-installLocalLifecycle(getSettings);
+installLocalLifecycle(getSettings, async (tabId, enabled) => {
+  try {
+    if (enabled) await ensureContentScript(tabId);
+    await chrome.tabs.sendMessage(tabId, { type: enabled ? 'START_AUTO_TRANSLATE' : 'STOP_AUTO_TRANSLATE' });
+  } catch { /* Navigation can replace a document before its script is ready. */ }
+});
 
 chrome.runtime.onInstalled.addListener(async () => {
   await purgeLegacyImages();
@@ -19,6 +25,20 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
+    if (message.type === 'SET_SITE_AUTO') {
+      try {
+        const popup = localControlSender(_sender, chrome.runtime.id);
+        if (!popup && !(_sender.id === chrome.runtime.id && _sender.tab?.id !== undefined && message.enabled === false)) {
+          throw new Error('Auto-translate controls require the extension popup or its own stop button');
+        }
+        const tab = popup ? (await chrome.tabs.query({ active: true, currentWindow: true }))[0] : _sender.tab;
+        if (tab?.id === undefined) throw new Error('No active browser tab');
+        sendResponse(await setSiteAuto(tab.id, message.enabled === true, await getSettings()));
+      } catch (error) {
+        sendResponse({ error: error instanceof Error ? error.message : 'Unable to update Auto-translate' });
+      }
+      return;
+    }
     if (typeof message.type === 'string' && message.type.startsWith('LOCAL_')) {
       try {
         if (!localControlSender(_sender, chrome.runtime.id)) throw new Error('Local model controls are available from the extension popup only');
@@ -134,7 +154,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'TRANSLATE_IMAGE_WITH_BODY') {
       const { imageUrl, pageUrl, body } = message as { type: string; imageUrl: string; pageUrl?: string; body: TranslateRequest };
       try {
-        const result = await fetchAndTranslateWithBody(imageUrl, pageUrl, body);
+        const result = await fetchAndTranslateWithBody(imageUrl, pageUrl, body, progress => {
+          if (_sender.tab?.id !== undefined && typeof message.requestId === 'string') {
+            void chrome.tabs.sendMessage(_sender.tab.id, { type: 'TRANSLATION_PROGRESS', requestId: message.requestId, progress }).catch(() => {});
+          }
+        });
         sendResponse(result);
       } catch (error) {
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
@@ -186,14 +210,14 @@ async function fetchModelList(baseUrl: string, apiKey: string): Promise<string[]
 // Fetch image + translate via backend (runs in background — no CORS)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | undefined, body: TranslateRequest): Promise<TranslateResult> {
+async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | undefined, body: TranslateRequest, update: (progress: TranslationProgress) => void): Promise<TranslateResult> {
   // Image is already fetched and base64-encoded by content script (with page cookies/auth).
   // Background only calls the backend API — no image fetching here.
   void imageUrl; void pageUrl;
 
   const settings = await getSettings();
   const backendUrl = effectiveBackend(settings);
-  const endpoint = `${backendUrl.replace(/\/$/, '')}/translate`;
+  const endpoint = `${backendUrl.replace(/\/$/, '')}/translate${settings.localAiEnabled ? '/stream' : ''}`;
 
   try {
     const res = await fetch(endpoint, {
@@ -212,7 +236,7 @@ async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | und
       } catch { /* ignore */ }
       return { error: `Translate failed: ${detail}` };
     }
-    const data = (await res.json()) as TranslateResponse;
+    const data = settings.localAiEnabled ? await readTranslationStream(res, update) : (await res.json()) as TranslateResponse;
     return {
       translated_image: data.translated_image,
       bubbles: data.bubbles,

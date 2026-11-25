@@ -5,7 +5,7 @@ const ROOT = 'http://127.0.0.1:7678';
 const SESSION = 'manga_local_session';
 const ALARM = 'manga-local-reconcile';
 const SETTINGS = 'manga_translator_settings';
-export type Pins = { id: string; hosts: string[]; windows: number[] };
+export type Pins = { id: string; hosts: string[]; windows: number[]; autoHosts?: string[] };
 
 export function localControlSender(sender: {id?: string; url?: string}, extensionId: string): boolean {
   return sender.id === extensionId && sender.url === `chrome-extension://${extensionId}/popup/index.html`;
@@ -64,19 +64,26 @@ export function prunePins(pins: Pins, tabs: Array<{url?: string; windowId: numbe
     id: pins.id,
     hosts: enabled ? pins.hosts.filter(host => hosts.has(host)) : [],
     windows: enabled ? pins.windows.filter(windowId => windows.has(windowId)) : [],
+    autoHosts: (pins.autoHosts ?? []).filter(host => hosts.has(host)),
   };
 }
 
 async function reconcile(settings: AppSettings, pins: Pins, tabs?: chrome.tabs.Tab[]): Promise<Record<string, unknown>> {
   pins = prunePins(pins, tabs ?? await chrome.tabs.query({}), settings.localAiEnabled);
-  const keep = pins.hosts.length > 0 || pins.windows.length > 0;
+  const keep = settings.localAiEnabled && (pins.hosts.length > 0 || pins.windows.length > 0 || !!pins.autoHosts?.length);
   await savePins(pins);
-  if (keep) {
+  if (keep || pins.autoHosts?.length) {
     await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
   } else {
     await chrome.alarms.clear(ALARM);
   }
-  return localFetch('/local/lease', { id: pins.id, model: settings.localModel, keep });
+  const lease = { id: pins.id, model: settings.localModel, keep };
+  if (!settings.localAiEnabled) {
+    // Cloud Auto-translate must not depend on a running local controller.
+    void localFetch('/local/lease', lease).catch(() => {});
+    return { ok: true };
+  }
+  return localFetch('/local/lease', lease);
 }
 
 export async function purgeLegacyImages(): Promise<void> {
@@ -85,12 +92,22 @@ export async function purgeLegacyImages(): Promise<void> {
   if (keys.length) await chrome.storage.local.remove(keys);
 }
 
-export function installLocalLifecycle(getSettings: () => Promise<AppSettings>): void {
+type SyncAuto = (tabId: number, enabled: boolean) => Promise<void>;
+let syncAuto: SyncAuto = async () => {};
+
+export function installLocalLifecycle(getSettings: () => Promise<AppSettings>, sync: SyncAuto): void {
+  syncAuto = sync;
   const refresh = () => {
     void ordered(async () => {
       const pins = await getPins();
-      if (pins.hosts.length || pins.windows.length) {
-        await reconcile(await getSettings(), pins);
+      if (pins.hosts.length || pins.windows.length || pins.autoHosts?.length) {
+        const tabs = await chrome.tabs.query({});
+        await reconcile(await getSettings(), pins, tabs);
+        for (const tab of tabs) {
+          if (tab.id !== undefined && tab.status === 'complete' && pins.autoHosts?.includes(hostname(tab.url) ?? '')) {
+            await syncAuto(tab.id, true);
+          }
+        }
       }
     }).catch(() => { /* Expiring Rust leases recover from a closed/crashed browser. */ });
   };
@@ -107,12 +124,49 @@ export function installLocalLifecycle(getSettings: () => Promise<AppSettings>): 
   chrome.runtime.onStartup.addListener(() => { void purgeLegacyImages(); refresh(); });
 }
 
+/** Host comes from Chrome's tab record, never from a website-supplied message. */
+export async function setSiteAuto(tabId: number, enabled: boolean, settings: AppSettings): Promise<Record<string, unknown>> {
+  return ordered(async () => {
+    const tab = await chrome.tabs.get(tabId);
+    const host = hostname(tab.url);
+    if (!host) throw new Error('Open a normal HTTP or HTTPS site first');
+    const pins = await getPins();
+    const hosts = new Set(pins.autoHosts ?? []);
+    if (enabled) hosts.add(host); else hosts.delete(host);
+    pins.autoHosts = [...hosts];
+    // Save intent before loading so same-site navigation can recover it.
+    await savePins(pins);
+    const matching = (await chrome.tabs.query({})).filter(current => hostname(current.url) === host);
+    for (const current of matching) {
+      if (current.id !== undefined) await syncAuto(current.id, enabled);
+    }
+    try {
+      await reconcile(settings, pins);
+    } catch (error) {
+      if (enabled) {
+        pins.autoHosts = pins.autoHosts.filter(value => value !== host);
+        await savePins(pins);
+        for (const current of matching) {
+          if (current.id !== undefined) await syncAuto(current.id, false);
+        }
+      }
+      throw error;
+    }
+    return { ok: true };
+  });
+}
+
 export async function handleLocalMessage(message: { type: string }, settings: AppSettings): Promise<Record<string, unknown>> {
   if (message.type === 'LOCAL_STATUS') return localFetch('/local/models');
   return ordered(async () => {
     const pins = await getPins();
     if (message.type === 'LOCAL_RELEASE') {
       pins.hosts = []; pins.windows = [];
+      const autoHosts = pins.autoHosts ?? [];
+      pins.autoHosts = [];
+      for (const tab of await chrome.tabs.query({})) {
+        if (tab.id !== undefined && autoHosts.includes(hostname(tab.url) ?? '')) await syncAuto(tab.id, false);
+      }
       return reconcile(settings, pins);
     }
     if (!settings.localAiEnabled) throw new Error('Enable Local AI first');

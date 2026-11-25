@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 import unittest
+import json
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -67,12 +68,35 @@ class ApiTests(unittest.TestCase):
 
     def test_rejects_path_output_before_running_pipeline(self):
         for route, body in [("/translate", {"image": "synthetic"}),
+                            ("/translate/stream", {"image": "synthetic"}),
                             ("/translate/batch", {"images": []})]:
             for option in ("output_path", "output_dir"):
                 with self.subTest(route=route, option=option):
                     response = self.client.post(route, json={**body, option: "forbidden.png"})
                     self.assertEqual(response.status_code, 422, response.text)
         self.mock_pipeline.assert_not_called()
+
+    def test_stream_reports_actual_steps_and_final_wire_result(self):
+        def run(image, config, progress):
+            progress(0, "Loading model")
+            progress(4, "Translating text regions")
+            progress(6, "Encoding result")
+            return self.image, [], 0.01
+        self.mock_pipeline.side_effect = run
+        response = self.client.post('/translate/stream', json={"image":"synthetic", "provider":"Local"})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([e['completed'] for e in events if e['type']=='progress'], [0,4,6,7])
+        self.assertTrue(all(e['total']==8 for e in events if e['type']=='progress'))
+        self.assertEqual(events[-1]['type'],'result')
+        self.assertTrue(events[-1]['result']['translated_image'])
+
+    def test_stream_failure_is_sanitized_and_does_not_report_success(self):
+        self.mock_pipeline.side_effect = RuntimeError('synthetic private payload')
+        response = self.client.post('/translate/stream', json={"image":"synthetic", "provider":"Local"})
+        self.assertNotIn('private payload', response.text)
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]['type'],'error')
+        self.assertFalse(any(e['type']=='result' for e in events))
 
 
 if __name__ == "__main__":
