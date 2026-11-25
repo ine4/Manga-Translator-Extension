@@ -15,6 +15,9 @@ function qs<T extends HTMLElement>(id: string): T {
   return el;
 }
 
+const localEnabled = qs<HTMLInputElement>('f-local-enabled');
+const localModel = qs<HTMLSelectElement>('f-local-model');
+const localStatus = qs<HTMLParagraphElement>('local-status');
 const backendInput = qs<HTMLInputElement>('f-backend');
 const sourceSelect = qs<HTMLSelectElement>('f-source');
 const targetSelect = qs<HTMLSelectElement>('f-target');
@@ -58,6 +61,7 @@ function normalizeSettings(raw?: StoredSettings): AppSettings {
   return {
     ...DEFAULT_SETTINGS,
     ...(raw ?? {}),
+    localAiEnabled: raw ? (raw.localAiEnabled ?? false) : DEFAULT_SETTINGS.localAiEnabled,
     uiLanguage: normalizeUiLanguage(raw?.uiLanguage),
     config: {
       ...DEFAULT_SETTINGS.config,
@@ -89,7 +93,8 @@ function populateUiLanguageSelect(selected: UiLanguage): void {
 }
 
 function renderLanguageSelects(): void {
-  populateSelect(sourceSelect, SOURCE_LANGUAGES, settings.config.inputLanguage);
+  const sourceOptions = localEnabled.checked ? SOURCE_LANGUAGES : SOURCE_LANGUAGES.filter(lang => lang !== 'Auto');
+  populateSelect(sourceSelect, sourceOptions, settings.config.inputLanguage === 'Auto' && !localEnabled.checked ? 'Japanese' : settings.config.inputLanguage);
   populateSelect(targetSelect, TARGET_LANGUAGES, settings.config.outputLanguage);
 }
 
@@ -159,6 +164,11 @@ async function loadAndBind(): Promise<void> {
 
   backendInput.value = settings.backendUrl;
   urlDisplay.textContent = settings.backendUrl.replace(/^https?:\/\//, '');
+  localEnabled.checked = settings.localAiEnabled;
+  if (!Array.from(localModel.options).some(option => option.value === settings.localModel)) {
+    localModel.add(new Option(settings.localModel, settings.localModel));
+  }
+  localModel.value = settings.localModel;
   renderLanguageSelects();
   outsideTextToggle.checked = settings.config.outsideTextEnabled ?? false;
 
@@ -176,12 +186,14 @@ async function loadAndBind(): Promise<void> {
   instructionsInput.value = settings.config.specialInstructions ?? '';
 
   bind();
-  await checkHealth(settings.backendUrl);
+  void refreshLocalModels();
+  await checkHealth(settings.localAiEnabled ? 'http://127.0.0.1:7677' : settings.backendUrl);
 }
 
 function bind(): void {
   if (isBound) return;
   isBound = true;
+  bindLocalControls();
 
   saveBtn.addEventListener('click', async () => { await saveAndReport('statusSettingsSaved'); });
   saveConfigBtn.addEventListener('click', async () => { await saveAndReport('statusSettingsSaved'); });
@@ -409,6 +421,8 @@ function collectAllSettings(): AppSettings {
   return {
     ...settings,
     backendUrl: backendInput.value.trim() || DEFAULT_SETTINGS.backendUrl,
+    localAiEnabled: localEnabled.checked,
+    localModel: localModel.value || DEFAULT_SETTINGS.localModel,
     uiLanguage: normalizeUiLanguage(uiLanguageSelect.value),
     config: {
       ...settings.config,
@@ -484,6 +498,62 @@ async function ensureContentScript(tabId: number): Promise<boolean> {
 function setStatus(message: string, type: '' | 'ok' | 'err'): void {
   statusEl.textContent = message;
   statusEl.className = type;
+}
+
+type LocalStatus = {
+  models?: Array<{ id: string; label: string; installed: boolean }>;
+  loaded_model?: string | null;
+  engine_available?: boolean;
+  error?: string;
+};
+async function refreshLocalModels(): Promise<void> {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'LOCAL_STATUS' }) as LocalStatus;
+    if (result.error) throw new Error(result.error);
+    const selected = localModel.value || DEFAULT_SETTINGS.localModel;
+    localModel.replaceChildren();
+    for (const model of result.models ?? []) {
+      localModel.add(new Option(model.label + (model.installed ? '' : ' (not installed)'), model.id));
+    }
+    if (!Array.from(localModel.options).some(o => o.value === selected)) {
+      localModel.add(new Option(selected + ' (not installed)', selected));
+    }
+    localModel.value = selected;
+    localStatus.textContent = !result.engine_available
+      ? 'CUDA engine not installed. Run setup-local-ai.bat.'
+      : result.loaded_model ? 'In VRAM: ' + result.loaded_model : 'Model unloaded (SSD).';
+  } catch {
+    localStatus.textContent = 'Local controller offline. Run start-backend.bat.';
+  }
+}
+function bindLocalControls(): void {
+  localEnabled.addEventListener('change', async () => {
+    settings = collectAllSettings();
+    renderLanguageSelects();
+    if (!localEnabled.checked && sourceSelect.value === 'Auto') sourceSelect.value = 'Japanese';
+    await autoSave();
+    void refreshLocalModels();
+  });
+  localModel.addEventListener('change', () => { void autoSave(); });
+  qs<HTMLButtonElement>('btn-local-refresh').addEventListener('click', () => { void refreshLocalModels(); });
+  for (const [id, type] of [
+    ['btn-local-site', 'LOCAL_PIN_SITE'],
+    ['btn-local-window', 'LOCAL_PIN_WINDOW'],
+    ['btn-local-release', 'LOCAL_RELEASE'],
+  ]) {
+    qs<HTMLButtonElement>(id).addEventListener('click', async () => {
+      localStatus.textContent = 'Updating model residency...';
+      try {
+        if (type !== 'LOCAL_RELEASE') localEnabled.checked = true;
+        await autoSave();
+        const result = await chrome.runtime.sendMessage({ type }) as LocalStatus;
+        if (result.error) throw new Error(result.error);
+        await refreshLocalModels();
+      } catch (e) {
+        localStatus.textContent = e instanceof Error ? e.message : 'Local controller unavailable';
+      }
+    });
+  }
 }
 
 void init();

@@ -537,11 +537,8 @@ async function processAutoTranslateQueue(): Promise<void> {
     if (translatedCache.has(item.url)) {
       applyTranslatedImage(item.img, `data:image/png;base64,${translatedCache.get(item.url)!}`, item.url);
       if (isNearViewport(item.img)) queueAutoTranslateLookahead(item.img);
-      console.log('[MT] apply from cache:', item.url);
       continue;
     }
-
-    console.log('[MT] processing:', item.url);
     autoTranslateInFlightUrls.add(item.url);
     autoTranslateConcurrent++;
     void translateAndApply(item.img, item.url).finally(() => {
@@ -556,12 +553,11 @@ async function processAutoTranslateQueue(): Promise<void> {
 }
 
 async function translateAndApply(img: HTMLImageElement, url: string): Promise<void> {
-  console.log('[MT] translateAndApply start:', url);
-  if (!autoTranslateActive) { console.log('[MT] not active, returning'); return; }
+  if (!autoTranslateActive) { return; }
 
   // Check retry count
   const retries = AUTO_RETRY_MAP.get(url) ?? 0;
-  if (retries >= AUTO_RETRY_MAX) { console.log('[MT] max retries reached:', url); return; }
+  if (retries >= AUTO_RETRY_MAX) { return; }
 
   updateAutoTranslateCounter();
 
@@ -569,26 +565,21 @@ async function translateAndApply(img: HTMLImageElement, url: string): Promise<vo
   const imgData = await fetchImageData(url, pageUrl);
   if (!autoTranslateActive) return;
   if (!imgData) {
-    console.log('[MT] image data unavailable:', url);
     AUTO_RETRY_MAP.set(url, retries + 1);
     return;
   }
 
   const settings = await loadSettings();
   const body = buildTranslateRequest(imgData, settings);
-
-  console.log('[MT] routing translated body through background:', url);
   const result = await bgTranslateImageWithBody(url, pageUrl, body);
   if (!autoTranslateActive) return;
 
   if (result.error) {
-    console.log('[MT] bgTranslateImage error:', result.error);
     AUTO_RETRY_MAP.set(url, retries + 1);
     return;
   }
 
   if (!result.translated_image) {
-    console.log('[MT] no translated_image in result');
     return;
   }
 
@@ -597,12 +588,10 @@ async function translateAndApply(img: HTMLImageElement, url: string): Promise<vo
 
   // Cache it
   translatedCache.set(url, translatedB64);
-  await saveTranslatedCacheEntry(url, translatedB64);
 
   // Apply to the image element on page
   applyTranslatedImage(img, dataUrl, url);
   if (isNearViewport(img)) queueAutoTranslateLookahead(img);
-  console.log('[MT] applied:', url);
   updateAutoTranslateCounter();
 }
 
@@ -822,43 +811,18 @@ function addTranslatedBadge(img: HTMLImageElement): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auto-translate: translated cache persistence
+// Auto-translate: document-memory-only translated cache
 // ─────────────────────────────────────────────────────────────────────────────
 
 let translatedCache = new Map<string, string>(); // rawUrl -> base64 (no prefix)
 
-function cacheStorageKey(url: string): string {
-  let hash = 0;
-  for (let i = 0; i < url.length; i++) {
-    hash = ((hash << 5) - hash + url.charCodeAt(i)) | 0;
-  }
-  return `${TRANSLATED_CACHE_PREFIX}${Math.abs(hash).toString(36)}:${url.slice(-80)}`;
-}
-
 async function loadTranslatedCache(): Promise<void> {
+  // Migration: remove legacy persisted image/URL entries without restoring them.
   try {
-    const result = await chrome.storage.local.get(null);
-    const cached = result[TRANSLATED_CACHE_KEY] as Record<string, string> | undefined;
-    if (cached) {
-      for (const [url, b64] of Object.entries(cached)) {
-        translatedCache.set(url, b64);
-      }
-    }
-
-    for (const [key, value] of Object.entries(result)) {
-      if (!key.startsWith(TRANSLATED_CACHE_PREFIX)) continue;
-      const entry = value as { url?: string; b64?: string };
-      if (entry?.url && entry?.b64) {
-        translatedCache.set(entry.url, entry.b64);
-      }
-    }
-  } catch { /* ignore */ }
-}
-
-async function saveTranslatedCacheEntry(url: string, b64: string): Promise<void> {
-  try {
-    await chrome.storage.local.set({ [cacheStorageKey(url)]: { url, b64 } });
-  } catch { /* ignore */ }
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter(key => key === TRANSLATED_CACHE_KEY || key.startsWith(TRANSLATED_CACHE_PREFIX));
+    if (keys.length) await chrome.storage.local.remove(keys);
+  } catch { /* no persistence fallback */ }
 }
 
 async function clearTranslatedCache(): Promise<void> {
@@ -1301,7 +1265,6 @@ function bindScanner(shadow: ShadowRoot): void {
           const imgEl = card?.querySelector<HTMLImageElement>('.mts-thumb');
           if (imgEl) {
             translatedCache.set(page.rawUrl, imgEl.src.replace(/^data:image\/\w+;base64,/, ''));
-            await saveTranslatedCacheEntry(page.rawUrl, imgEl.src.replace(/^data:image\/\w+;base64,/, ''));
           }
         }
         success++;
@@ -1442,7 +1405,6 @@ async function translateOne(page: PageEntry, statusEl: HTMLElement | null): Prom
     imageCache.set(page.rawUrl, translatedDataUrl);
 
     translatedCache.set(page.rawUrl, translatedB64);
-    await saveTranslatedCacheEntry(page.rawUrl, translatedB64);
     applyTranslatedImageToPage(page.rawUrl, translatedDataUrl);
 
     if (currentShadow) {
@@ -1521,6 +1483,7 @@ async function fetchImageData(url: string, pageUrl: string): Promise<string | nu
 async function fetchImageWithAuth(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
+      cache: 'no-store',
       credentials: 'include',
       headers: {
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',

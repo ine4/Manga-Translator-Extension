@@ -107,6 +107,8 @@ export interface ChapterCollectionResult {
 
 export interface AppSettings {
   backendUrl: string;
+  localAiEnabled: boolean;
+  localModel: string;
   autoDetect: boolean;
   showBubbleBboxes: boolean;
   uiLanguage: UiLanguage;
@@ -115,11 +117,13 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   backendUrl: 'http://localhost:7677',
+  localAiEnabled: true,
+  localModel: 'qwen3-vl-4b',
   autoDetect: false,
   showBubbleBboxes: false,
   uiLanguage: 'en',
   config: {
-    inputLanguage: 'Japanese',
+    inputLanguage: 'Auto',
     outputLanguage: 'English',
     provider: 'Google',
     temperature: 0.1,
@@ -150,8 +154,8 @@ export const LANGUAGES = [
   'Ukrainian', 'Urdu', 'Uzbek', 'Vietnamese', 'Welsh',
 ] as const;
 
-export const SOURCE_LANGUAGES = ['Japanese', 'Korean', 'English', 'Vietnamese'] as const;
-export const TARGET_LANGUAGES = ['Japanese', 'Korean', 'English', 'Vietnamese'] as const;
+export const SOURCE_LANGUAGES = ['Auto', ...LANGUAGES] as const;
+export const TARGET_LANGUAGES = LANGUAGES;
 
 export const PROVIDERS = [
   'Google', 'OpenAI', 'Anthropic', 'xAI', 'DeepSeek',
