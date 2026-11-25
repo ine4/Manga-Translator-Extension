@@ -8,6 +8,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       width: 390px;
+      max-width: 100%;
       min-height: 460px;
       font-family: Inter, system-ui, sans-serif;
       background: #080c18;
@@ -203,6 +204,17 @@
           </label>
         </div>
       </div>
+      <div class="config-section">
+        <div class="field">
+          <label class="label" for="f-reading-mode">Local reading mode</label>
+          <select id="f-reading-mode" class="select">
+            <option value="custom">Current settings</option>
+            <option value="fast">Fast — crops only, 2× rendering</option>
+            <option value="context">Full context — page + crops, 4× rendering</option>
+          </select>
+        </div>
+        <div class="model-hint">Fast uses less visual context and slightly softer text. Full context keeps the surrounding page for translation.</div>
+      </div>
       <div class="actions">
         <button id="btn-scan" class="btn btn-primary" data-i18n="btnScan">Scan &amp; Translate Page</button>
         <div class="actions-row">
@@ -322,6 +334,15 @@
     </div>
 
     <div id="tab-config" class="tab-pane">
+      <div class="config-section">
+        <label class="label" for="f-chapter-language">Chapter language — this tab until unlocked</label>
+        <select id="f-chapter-language" class="select"></select>
+        <div class="actions-row">
+          <button id="btn-lock-language" class="btn btn-secondary">Lock chapter language</button>
+          <button id="btn-unlock-language" class="btn btn-secondary">Unlock language</button>
+        </div>
+        <div id="chapter-language-status" class="model-hint" role="status">Language follows the source selection.</div>
+      </div>
       <div class="config-section">
         <div class="field">
           <label class="label" data-i18n="labelUiLanguage">Extension language</label>

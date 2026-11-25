@@ -2,6 +2,23 @@ import { DEFAULT_SETTINGS, SOURCE_LANGUAGES, TARGET_LANGUAGES, type AppSettings 
 import { UI_LANGUAGES, languageLabel, normalizeUiLanguage, t, type I18nKey, type UiLanguage } from '../shared/i18n.js';
 
 const STORAGE_KEY = 'manga_translator_settings';
+const readingMode = qs<HTMLSelectElement>('f-reading-mode');
+const chapterSelect = qs<HTMLSelectElement>('f-chapter-language');
+
+function readingControls(): void {
+  readingMode.disabled = !localEnabled.checked;
+  contextToggle.disabled = localEnabled.checked && readingMode.value !== 'custom';
+  contextToggle.checked = !localEnabled.checked ? settings.config.sendFullPageContext
+    : readingMode.value === 'fast' ? false : readingMode.value === 'context' ? true : (settings.localFullPageContext ?? false);
+}
+
+async function chapterControl(action: 'get' | 'lock' | 'unlock'): Promise<void> {
+  const result = await chrome.runtime.sendMessage({type:'CHAPTER_LANGUAGE',action,language:chapterSelect.value});
+  const label = qs<HTMLElement>('chapter-language-status');
+  if (result.error) { label.textContent=result.error; return; }
+  label.textContent = result.language ? `Locked: ${result.language}. Unlock when you change chapters.` : 'Unlocked — language follows the source selection.';
+  if (result.language) chapterSelect.value=result.language;
+}
 
 type StoredSettings = Partial<Omit<AppSettings, 'config'>> & {
   config?: Partial<AppSettings['config']>;
@@ -169,6 +186,8 @@ async function loadAndBind(): Promise<void> {
     localModel.add(new Option(settings.localModel, settings.localModel));
   }
   localModel.value = settings.localModel;
+  readingMode.value = settings.localReadingMode ?? 'custom';
+  chapterSelect.replaceChildren(...TARGET_LANGUAGES.map(language=>new Option(language,language)));
   renderLanguageSelects();
   outsideTextToggle.checked = settings.config.outsideTextEnabled ?? false;
 
@@ -182,10 +201,11 @@ async function loadAndBind(): Promise<void> {
   tempVal.textContent = Number(settings.config.temperature).toFixed(2);
   topPVal.textContent = Number(settings.config.topP).toFixed(2);
   topKVal.textContent = String(settings.config.topK);
-  contextToggle.checked = settings.localAiEnabled ? (settings.localFullPageContext ?? false) : settings.config.sendFullPageContext;
+  readingControls();
   instructionsInput.value = settings.config.specialInstructions ?? '';
 
   bind();
+  void chapterControl('get');
   void refreshLocalModels();
   await checkHealth(settings.localAiEnabled ? 'http://127.0.0.1:7677' : settings.backendUrl);
 }
@@ -194,6 +214,9 @@ function bind(): void {
   if (isBound) return;
   isBound = true;
   bindLocalControls();
+  readingMode.addEventListener('change',async()=>{readingControls();await autoSave();});
+  qs<HTMLButtonElement>('btn-lock-language').addEventListener('click',()=>{void chapterControl('lock');});
+  qs<HTMLButtonElement>('btn-unlock-language').addEventListener('click',()=>{void chapterControl('unlock');});
 
   saveBtn.addEventListener('click', async () => { await saveAndReport('statusSettingsSaved'); });
   saveConfigBtn.addEventListener('click', async () => { await saveAndReport('statusSettingsSaved'); });
@@ -425,7 +448,8 @@ function collectAllSettings(): AppSettings {
     backendUrl: backendInput.value.trim() || DEFAULT_SETTINGS.backendUrl,
     localAiEnabled: localEnabled.checked,
     localModel: localModel.value || DEFAULT_SETTINGS.localModel,
-    localFullPageContext: localEnabled.checked ? contextToggle.checked : (settings.localFullPageContext ?? false),
+    localFullPageContext: localEnabled.checked && readingMode.value === 'custom' ? contextToggle.checked : (settings.localFullPageContext ?? false),
+    localReadingMode: readingMode.value as AppSettings['localReadingMode'],
     uiLanguage: normalizeUiLanguage(uiLanguageSelect.value),
     config: {
       ...settings.config,
@@ -531,7 +555,7 @@ async function refreshLocalModels(): Promise<void> {
 }
 function bindLocalControls(): void {
   localEnabled.addEventListener('change', async () => {
-    contextToggle.checked = localEnabled.checked ? (settings.localFullPageContext ?? false) : settings.config.sendFullPageContext;
+    readingControls();
     settings = collectAllSettings();
     renderLanguageSelects();
     if (!localEnabled.checked && sourceSelect.value === 'Auto') sourceSelect.value = 'Japanese';
@@ -550,7 +574,7 @@ function bindLocalControls(): void {
       try {
         if (type !== 'LOCAL_RELEASE' && !localEnabled.checked) {
           localEnabled.checked = true;
-          contextToggle.checked = settings.localFullPageContext ?? false;
+          readingControls();
           settings = collectAllSettings();
           renderLanguageSelects();
         }

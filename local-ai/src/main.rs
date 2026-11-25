@@ -14,6 +14,7 @@ use std::{
 };
 use tokio::{process::{Child, Command}, sync::Mutex, time::sleep};
 use uuid::Uuid;
+mod engine_options;
 
 #[cfg(windows)]
 mod windows_job;
@@ -139,6 +140,7 @@ impl Runtime {
         self.stop().await;
         let (weights, projector) = model.paths(&self.root);
         let key = Uuid::new_v4().to_string();
+        let options = engine_options::EngineOptions::load(Path::new("local-ai/engine.json")).map_err(unavailable)?;
         let mut cmd = Command::new(&self.engine);
         cmd.arg("--model").arg(weights).arg("--mmproj").arg(projector)
             .args(["--host","127.0.0.1","--port","7679","--alias",model_id,
@@ -146,6 +148,12 @@ impl Runtime {
                 "--api-key",&key,"--no-webui","--log-disable"])
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .kill_on_drop(true);
+        cmd.args(["--flash-attn", &options.flash_attention])
+            .arg("--batch-size").arg(options.batch_size.to_string())
+            .arg("--ubatch-size").arg(options.ubatch_size.to_string());
+        if let Some(tokens) = options.image_max_tokens {
+            cmd.arg("--image-max-tokens").arg(tokens.to_string());
+        }
         let mut child = cmd.spawn().map_err(|_| unavailable("Could not start CUDA inference engine"))?;
         let until = Instant::now() + Duration::from_secs(120);
         while Instant::now() < until {

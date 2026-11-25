@@ -2,8 +2,18 @@ import type { AppSettings, TranslateRequest } from '../shared/types.js';
 import { usableImageUrl } from '../shared/image-url.js';
 import type { TranslationProgress } from '../shared/progress.js';
 import { progressLabel } from '../shared/progress-label.js';
+import { ImagePrefetch } from '../shared/prefetch.js';
 
 const progressListeners = new Map<string, (progress: TranslationProgress) => void>();
+let lockedChapterLanguage: string | null = null;
+
+function showChapterLock(language: string | null): void {
+  lockedChapterLanguage = language;
+  const label = document.getElementById('mt-chapter-lock');
+  if (label) label.textContent = language ? `Chapter: ${language}` : '';
+  const button = document.getElementById('mt-chapter-unlock');
+  if (button) button.hidden = !language;
+}
 
 const ROOT_ID  = 'mt-scanner-root';
 const STYLE_ID = 'mt-scanner-style';
@@ -190,6 +200,10 @@ function normalizeUiLanguage(language: unknown): UiLanguage {
 // ─────────────────────────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
+  if (msg.type === 'CHAPTER_LANGUAGE_CHANGED' && _sender.id === chrome.runtime.id) {
+    showChapterLock(msg.language);
+    return false;
+  }
   if (msg.type === 'TRANSLATION_PROGRESS' && _sender.id === chrome.runtime.id) {
     progressListeners.get(msg.requestId)?.(msg.progress);
     return false;
@@ -209,7 +223,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
     return false;
   }
   if (msg.type === 'GET_AUTO_TRANSLATE_STATUS') {
-    send({ active: autoTranslateActive });
+    send({ active: autoTranslateActive, prefetch: upcomingImages.stats });
     return false;
   }
   if (msg.type === 'CLEAR_CACHE') {
@@ -269,7 +283,8 @@ let scannerPausedAutoTranslate = false;
 let translatedOverlayCounter = 0;
 const AUTO_MAX_CONCURRENT = 1;
 const AUTO_VIEWPORT_MARGIN_PX = 250;
-const AUTO_PREFETCH_PAGES = 3;
+const AUTO_PREFETCH_PAGES = 2;
+const upcomingImages = new ImagePrefetch();
 const AUTO_SCAN_LIMIT = 250;
 const LAZY_IMAGE_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-srcset', 'data-lazy', 'data-image'] as const;
 const AUTO_RETRY_MAP = new Map<string, number>(); // url -> retry count
@@ -324,6 +339,8 @@ async function startAutoTranslate(): Promise<void> {
 
   // Inject floating indicator
   injectAutoTranslateUI();
+  const chapter = await chrome.runtime.sendMessage({ type: 'CHAPTER_LANGUAGE', action: 'get' });
+  showChapterLock(chapter?.language ?? null);
   autoTranslateIntersectionObserver = new IntersectionObserver(
     (entries) => {
       if (!autoTranslateActive) return;
@@ -507,6 +524,7 @@ function collectAutoTranslateImageEntries(root: ParentNode): Array<{ img: HTMLIm
 
 function stopAutoTranslate(preserveScannerResume = false): void {
   autoTranslateActive = false;
+  upcomingImages.clear();
   finishAutoProgress('Stopped');
   if (!preserveScannerResume) scannerPausedAutoTranslate = false;
   autoTranslateQueue = [];
@@ -593,6 +611,9 @@ async function processAutoTranslateQueue(): Promise<void> {
       autoTranslateProcessing = false;
       void processAutoTranslateQueue();
     });
+    for (const upcoming of autoTranslateQueue.slice(0, AUTO_PREFETCH_PAGES)) {
+      upcomingImages.warm(upcoming.url, signal => prepareUpcomingImage(upcoming.img, upcoming.url, signal));
+    }
   }
 
   autoTranslateProcessing = false;
@@ -610,7 +631,7 @@ async function translateAndApply(img: HTMLImageElement, url: string): Promise<vo
   beginAutoProgress();
 
   const pageUrl = window.location.href;
-  const imgData = await fetchImageData(url, pageUrl);
+  const imgData = await upcomingImages.take(url) ?? await fetchImageData(url, pageUrl);
   if (!autoTranslateActive) return;
   if (!imgData) {
     throw new Error('Image could not be fetched');
@@ -866,7 +887,7 @@ function addTranslatedBadge(img: HTMLImageElement): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let translatedCache = new Map<string, string>(); // rawUrl -> base64 (no prefix)
-window.addEventListener('pagehide', () => { translatedCache.clear(); imageCache.clear(); });
+window.addEventListener('pagehide', () => { translatedCache.clear(); imageCache.clear(); upcomingImages.clear(); });
 
 async function loadTranslatedCache(): Promise<void> {
   // Migration: remove legacy persisted image/URL entries without restoring them.
@@ -903,10 +924,16 @@ function injectAutoTranslateUI(): void {
       <span class="mt-auto-count" id="mt-auto-count">0</span>
       <span id="mt-auto-progress" role="status">Waiting for images · 0% · 0.0s</span>
       <progress id="mt-auto-bar" max="8" value="0" aria-label="Completed translation steps"></progress>
+      <span id="mt-chapter-lock"></span>
+      <button id="mt-chapter-unlock" class="mt-auto-stop" hidden>Unlock language</button>
       <button class="mt-auto-stop" id="mt-auto-stop">${tr('stop')}</button>
     </div>
   `;
   document.body.appendChild(autoTranslateRoot);
+  showChapterLock(lockedChapterLanguage);
+  document.getElementById('mt-chapter-unlock')?.addEventListener('click', () => {
+    void chrome.runtime.sendMessage({type:'CHAPTER_LANGUAGE',action:'unlock'}).then(result=>showChapterLock(result?.language ?? null));
+  });
 
   const stopBtn = document.getElementById('mt-auto-stop');
   stopBtn?.addEventListener('click', (event) => {
@@ -998,7 +1025,7 @@ function updateAutoTranslateCounter(): void {
 
 function bgTranslateImageWithBody(imageUrl: string, pageUrl: string, body: TranslateRequest, update?: (progress: TranslationProgress) => void): Promise<{ translated_image?: string; bubbles?: unknown[]; processing_time_seconds?: number; error?: string }> {
   return new Promise((resolve) => {
-    const requestId = crypto.randomUUID();
+    const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
     if (update) progressListeners.set(requestId, update);
     const tid = setTimeout(() => {
       progressListeners.delete(requestId);
@@ -1544,21 +1571,51 @@ async function fetchImageData(url: string, pageUrl: string): Promise<string | nu
 }
 
 /** Fetch image from content script — inherits page cookies/auth unlike service worker. */
-async function fetchImageWithAuth(url: string): Promise<string | null> {
+async function prepareUpcomingImage(img: HTMLImageElement, url: string, signal: AbortSignal): Promise<string | null> {
+  await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+  if (signal.aborted || !autoTranslateActive) return null;
+  // Skip oversized prefetch preparation; the normal foreground path remains available.
+  if ((img.naturalWidth || img.width) * (img.naturalHeight || img.height) > 4_000_000) return null;
+  const captured = img.complete ? captureImgElement(img) : null;
+  if (captured) return captured.length * 2 <= upcomingImages.maxBytes ? captured : null;
+  const fetched = await fetchImageWithAuth(url, AbortSignal.any([signal, AbortSignal.timeout(6000)]), 6 * 1024 * 1024);
+  if (fetched || signal.aborted) return fetched;
+  const result = await chrome.runtime.sendMessage({type:'PREPARE_IMAGE',url});
+  return signal.aborted ? null : result?.base64 ?? null;
+}
+
+async function fetchImageWithAuth(url: string, signal?: AbortSignal, maxBytes?: number): Promise<string | null> {
   try {
     const res = await fetch(url, {
       cache: 'no-store',
       credentials: 'include',
+      signal,
       headers: {
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         'Origin': window.location.origin,
       },
     });
     if (!res.ok) return null;
-    const blob = await res.blob();
+    let blob: Blob;
+    if (maxBytes && res.body) {
+      const reader = res.body.getReader();
+      const chunks: BlobPart[] = [];
+      let bytes = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > maxBytes) { await reader.cancel(); return null; }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      blob = new Blob(chunks);
+    } else { blob = await res.blob(); }
+    if (signal?.aborted) return null;
     return await new Promise<string>((resolve) => {
       const fr = new FileReader();
-      fr.onloadend = () => resolve((fr.result as string).replace(/^data:image\/\w+;base64,/, ''));
+      fr.onloadend = () => resolve((fr.result as string).split(',', 2)[1] ?? '');
       fr.onerror = () => resolve('');
       fr.readAsDataURL(blob);
     });
