@@ -109,6 +109,7 @@ export interface AppSettings {
   backendUrl: string;
   localAiEnabled: boolean;
   localModel: string;
+  localFullPageContext?: boolean;
   autoDetect: boolean;
   showBubbleBboxes: boolean;
   uiLanguage: UiLanguage;
@@ -119,6 +120,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backendUrl: 'http://localhost:7677',
   localAiEnabled: true,
   localModel: 'qwen3-vl-4b',
+  localFullPageContext: false,
   autoDetect: false,
   showBubbleBboxes: false,
   uiLanguage: 'en',

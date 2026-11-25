@@ -34,9 +34,9 @@ SHA-256 values:
 | Q4_K_M weights | `66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a` |
 | Q8_0 projector | `30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d` |
 | Cargo.lock | `02c41fddab1ed50f5eedd7a6b5b596939c1ef4c90400071fb1b4352713d973fc` |
-| Built extension background JS | `77b5d09143c7ff36ea3fb1041d8629b3c7df75ec217786e9e6e99425e84fdb24` |
+| Built extension background JS | `0d4cc6f73fd1644169697ec45d586c3bf1b121ade3fd829ba21f42230efb8d40` |
 | Built extension content script JS | `ab6e7cd8c1d0dcb8535008adda995ceee7cdfc46dcf9f5619326d04f86dc2648` |
-| Built extension popup JS | `70623481fc00ce3fe872b71360e6e1bd33618ce3d1e0de12c5ff69a9e1c7161b` |
+| Built extension popup JS | `7c797cd81e1aaa6aad7c263a43859e595cc17d99b39f91855dd1cbcefbb797c7` |
 
 Both release archives passed the installer's pinned hash checks before extraction.
 Weights and runtime files remain ignored; no binary assets are committed.
@@ -132,3 +132,10 @@ Live Chrome tests used only generated pages in RAM. The final built extension wa
 Individual elapsed observations on generated pages: initial model-process load plus page 10.9 s and 13.2 s in separate runs; subsequent pinned same-host pages 3.7–4.1 s. These are not cache-cold benchmarks or guarantees. Before this feature, a separate two-bubble profile measured first-use detection/panel work 5.82 s, language AI 0.69 s, translation call 1.61 s and rendering 1.10 s (9.52 s total). Warm explicit-source runs measured 2.93 s with full-page context and 1.87 s without; this comparison does not establish equal translation quality.
 
 Selective Rust rewrites were considered. Existing detector/image/render calls already use native PyTorch/OpenCV/Skia libraries, and inference already uses native CUDA. The measurements did not justify replacing the Python pipeline in this batch. Avoiding repeated worker loads is the implemented performance change. Request-scoped preprocessing overlap and moving lifecycle/status work off the inference-held mutex remain candidates for separately measured changes; neither is claimed implemented here. The prior Process Monitor waiver and translation-quality limitations still apply.
+
+
+## Crop-only Local AI follow-up
+
+The owner selected crop-only vision input. Local translation routing now defaults send_full_page_context to false, including older installed settings, using a separate localFullPageContext preference. The existing Full Page Context control edits the active mode's preference; switching Local AI off/on restores the cloud/local values independently. Explicit Local full-page context remains available. Auto language identification still uses its separate thumbnail call. Rendering quality settings were not changed, and the backend API/provider behavior is unchanged.
+
+Production build and all 10 TypeScript tests passed, including Local default/legacy-setting coverage, explicit context opt-in and cloud context preservation. In the actual Chrome UI, Local context was off, cloud context remained on, and switching back restored Local off. Outgoing real loopback translation request metadata was inspected without saving image payloads: send_full_page_context false, input_language Auto, supersampling_factor 4. Two consecutive generated Japanese pages completed in 2.6 s each, including automatic same-site continuation, with the translated bubbles and 100% progress inspected on screen. This is a short synthetic fixture observation, not a performance or general translation-quality guarantee. The final build was reloaded into regular Chrome and Auto-translate restarted. No image, screenshot, prompt or browsing-history artifact was saved.

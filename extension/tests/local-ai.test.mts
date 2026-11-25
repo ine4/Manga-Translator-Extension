@@ -93,4 +93,13 @@ test('local routing strips cloud credentials and URL', () => {
   assert.equal(body.model_name,'qwen3-vl-4b');
   assert.equal(body.api_key,undefined);
   assert.equal(body.base_url,undefined);
+  assert.equal(body.send_full_page_context,false);
+});
+
+test('Local crop-only default is independent of saved cloud full-page context', () => {
+  const original={input_language:'Auto',send_full_page_context:true};
+  const legacyLocal={...DEFAULT_SETTINGS,localFullPageContext:undefined};
+  assert.equal(effectiveRequest(original as any,legacyLocal).send_full_page_context,false);
+  assert.equal(effectiveRequest(original as any,{...legacyLocal,localAiEnabled:false}).send_full_page_context,true);
+  assert.equal(effectiveRequest(original as any,{...legacyLocal,localFullPageContext:true}).send_full_page_context,true);
 });

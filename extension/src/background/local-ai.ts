@@ -19,6 +19,7 @@ export function effectiveRequest(body: TranslateRequest, settings: AppSettings):
   return {
     ...body, provider: 'Local', model_name: settings.localModel,
     base_url: undefined, api_key: undefined, translation_mode: 'one-step', ocr_method: 'LLM',
+    send_full_page_context: settings.localFullPageContext ?? false,
   };
 }
 export function hostname(url?: string): string | null {
