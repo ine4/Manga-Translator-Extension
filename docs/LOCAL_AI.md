@@ -51,6 +51,8 @@ Auto-translate site intent and site/window selections are stored in Chrome's vol
 
 Local Auto-translate shows the current backend stage, completed-step percentage, progress bar and elapsed seconds. The eight steps cover model readiness, language selection, detection, crop preparation, translation, rendering, encoding and applying the result. These are completed-work milestones, not a prediction of time remaining or GPU token completion. The clock runs while a stage is busy and stops when complete, stopped or failed. The existing single/batch JSON endpoints remain available; Local Auto-translate uses a request-memory NDJSON stream at `/translate/stream`.
 
+Local AI defaults to crop-only translation input: detected text-region crops are sent without the additional full-page context image. The Full Page Context toggle can restore context for Local AI independently of the saved cloud preference. Existing local installations also receive the crop-only default unless they explicitly enable the Local AI context setting. Rendering remains at its existing setting.
+
 Auto source detection is an additional local AI vision request. Python prepares a thumbnail and Qwen identifies the language and reading direction through the Rust/llama.cpp service. Explicit source selection skips that request. No OCR-only heuristic or cloud detector is substituted.
 
 ## Windows model manager

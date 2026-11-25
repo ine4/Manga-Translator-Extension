@@ -182,7 +182,7 @@ async function loadAndBind(): Promise<void> {
   tempVal.textContent = Number(settings.config.temperature).toFixed(2);
   topPVal.textContent = Number(settings.config.topP).toFixed(2);
   topKVal.textContent = String(settings.config.topK);
-  contextToggle.checked = settings.config.sendFullPageContext;
+  contextToggle.checked = settings.localAiEnabled ? (settings.localFullPageContext ?? false) : settings.config.sendFullPageContext;
   instructionsInput.value = settings.config.specialInstructions ?? '';
 
   bind();
@@ -425,6 +425,7 @@ function collectAllSettings(): AppSettings {
     backendUrl: backendInput.value.trim() || DEFAULT_SETTINGS.backendUrl,
     localAiEnabled: localEnabled.checked,
     localModel: localModel.value || DEFAULT_SETTINGS.localModel,
+    localFullPageContext: localEnabled.checked ? contextToggle.checked : (settings.localFullPageContext ?? false),
     uiLanguage: normalizeUiLanguage(uiLanguageSelect.value),
     config: {
       ...settings.config,
@@ -437,7 +438,7 @@ function collectAllSettings(): AppSettings {
       temperature: parseFloat(tempSlider.value),
       topP: parseFloat(topPSlider.value),
       topK: parseInt(topKSlider.value, 10),
-      sendFullPageContext: contextToggle.checked,
+      sendFullPageContext: localEnabled.checked ? settings.config.sendFullPageContext : contextToggle.checked,
       outsideTextEnabled: outsideTextToggle.checked,
       specialInstructions: instructionsInput.value.trim() || undefined,
     },
@@ -530,6 +531,7 @@ async function refreshLocalModels(): Promise<void> {
 }
 function bindLocalControls(): void {
   localEnabled.addEventListener('change', async () => {
+    contextToggle.checked = localEnabled.checked ? (settings.localFullPageContext ?? false) : settings.config.sendFullPageContext;
     settings = collectAllSettings();
     renderLanguageSelects();
     if (!localEnabled.checked && sourceSelect.value === 'Auto') sourceSelect.value = 'Japanese';
@@ -548,6 +550,7 @@ function bindLocalControls(): void {
       try {
         if (type !== 'LOCAL_RELEASE' && !localEnabled.checked) {
           localEnabled.checked = true;
+          contextToggle.checked = settings.localFullPageContext ?? false;
           settings = collectAllSettings();
           renderLanguageSelects();
         }
