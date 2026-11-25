@@ -424,108 +424,11 @@ def _apply_mask_debug_overlay(canvas, mask, color=(255, 0, 0, 84)):
     canvas.alpha_composite(Image.fromarray(overlay, mode="RGBA"))
 
 
-def _write_component_order_debug_image(
-    image_size,
-    sorted_items,
-    panels,
-    bubble_masks,
-    reading_direction,
-    image_path,
-    output_path,
-    verbose=False,
-):
-    """Write a debug PNG showing panel order and merged text-element order."""
-    width, height = image_size
-    if width <= 0 or height <= 0:
-        return
+def _write_component_order_debug_image(*args, **kwargs):
+    raise RuntimeError("Image debug output is disabled")
 
-    canvas = Image.new("RGBA", (width, height), (238, 238, 238, 255))
-    draw = ImageDraw.Draw(canvas)
-
-    panel_color = (32, 63, 255)
-    osb_color = (255, 0, 255)
-    bubble_color = (34, 160, 34)
-    index_color = (255, 0, 0)
-
-    font_size = max(14, min(width, height) // 28)
-    font = _load_debug_font(font_size)
-
-    panel_order = (
-        sort_panels_by_reading_order(panels, reading_direction) if panels else []
-    )
-
-    for item in sorted_items:
-        if item.get("is_outside_text", False):
-            continue
-        bbox = tuple(int(round(v)) for v in item.get("bbox", (0, 0, 0, 0)))
-        _apply_mask_debug_overlay(
-            canvas, bubble_masks.get(bbox) if bubble_masks else None
-        )
-
-    for panel_index, panel_id in enumerate(panel_order, start=1):
-        panel_bbox = tuple(int(round(v)) for v in panels[panel_id])
-        draw.rectangle(panel_bbox, outline=panel_color, width=3)
-        _draw_centered_index(draw, panel_bbox, panel_index, font, index_color)
-
-    for item_index, item in enumerate(sorted_items, start=1):
-        bbox = tuple(int(round(v)) for v in item.get("bbox", (0, 0, 0, 0)))
-        if item.get("is_outside_text", False):
-            draw.rectangle(bbox, outline=osb_color, width=2)
-            draw_bbox = bbox
-        else:
-            mask_bbox = (
-                _debug_mask_bbox(bubble_masks.get(bbox)) if bubble_masks else None
-            )
-            draw_bbox = tuple(mask_bbox) if mask_bbox is not None else bbox
-            _draw_dashed_rectangle(draw, draw_bbox, bubble_color, width=2)
-        _draw_centered_index(draw, draw_bbox, item_index, font, index_color)
-
-    base_path = Path(output_path) if output_path else Path(image_path)
-    debug_path = base_path.parent / f"{base_path.stem}.component-order-debug.png"
-    debug_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.convert("RGB").save(debug_path, format="PNG")
-    log_message(
-        f"Wrote component-order debug image: {debug_path}",
-        verbose=verbose,
-        always_print=True,
-    )
-
-
-def _write_llm_crop_debug_images(
-    sorted_items,
-    image_path,
-    output_path,
-    verbose=False,
-):
-    """Save the exact image crops the LLM sees to a debug subfolder."""
-    base_path = Path(output_path) if output_path else Path(image_path)
-    crop_dir = base_path.parent / f"{base_path.stem}.llm-crops"
-    crop_dir.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    for i, item in enumerate(sorted_items, start=1):
-        img_b64 = item.get("image_b64")
-        if not img_b64:
-            continue
-        try:
-            img_bytes = base64.b64decode(img_b64)
-            img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-            img_cv = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-            if img_cv is None:
-                continue
-            label = "osb" if item.get("is_outside_text", False) else "bubble"
-            crop_path = crop_dir / f"{i:03d}_{label}.png"
-            cv2.imwrite(str(crop_path), img_cv)
-            count += 1
-        except Exception:
-            pass
-
-    log_message(
-        f"Wrote {count} LLM crop debug images to: {crop_dir}",
-        verbose=verbose,
-        always_print=True,
-    )
-
+def _write_llm_crop_debug_images(*args, **kwargs):
+    raise RuntimeError("Image debug output is disabled")
 
 def _resolve_pre_upscale_factor(
     pre_cfg: Optional[PreprocessingConfig],
@@ -594,8 +497,8 @@ def translate_and_render(
         PIL.Image: Final translated image
     """
     start_time = time.time()
-    if image_override is not None and output_path is not None:
-        raise ValueError("In-memory API processing cannot write output files")
+    if output_path is not None:
+        raise ValueError("Saving translated images is disabled in this fork")
     # A label only: all image readers receive the actual PIL object.
     image_path = Path(image_path) if image_path is not None else Path("in-memory.png")
     verbose = config.verbose
@@ -728,7 +631,7 @@ def translate_and_render(
 
     panels = None
     debug_panels = None
-    if config.detection.use_panel_sorting or (ENABLE_COMPONENT_ORDER_DEBUG and image_override is None):
+    if config.detection.use_panel_sorting or False:
         try:
             log_message(
                 "Detecting panels...",
@@ -1047,7 +950,7 @@ def translate_and_render(
 
                 panels = None
                 debug_panels = None
-                if ENABLE_COMPONENT_ORDER_DEBUG and image_override is None:
+                if False:  # Disk debug image output is disabled
                     try:
                         log_message(
                             "Detecting panels for ordering debug...",
@@ -1055,7 +958,7 @@ def translate_and_render(
                         )
                         debug_panels = detect_panels(
                             image_path,
-                image_override=pil_original if image_override is not None else None,
+                            image_override=pil_original if image_override is not None else None,
                             confidence=config.detection.panel_confidence,
                             device=config.device,
                             verbose=verbose,
@@ -1087,7 +990,7 @@ def translate_and_render(
                         )
                         panels = detect_panels(
                             image_path,
-                image_override=pil_original if image_override is not None else None,
+                            image_override=pil_original if image_override is not None else None,
                             confidence=config.detection.panel_confidence,
                             device=config.device,
                             verbose=verbose,
@@ -1113,7 +1016,7 @@ def translate_and_render(
                 sorted_bubble_data = sort_bubbles_by_reading_order(
                     all_text_data, reading_direction, panels=panels
                 )
-                if ENABLE_COMPONENT_ORDER_DEBUG and image_override is None:
+                if False:  # Disk debug image output is disabled
                     bubble_debug_masks = {}
                     for bubble in sorted_bubble_data:
                         if bubble.get("is_outside_text", False):

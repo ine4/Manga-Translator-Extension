@@ -139,7 +139,7 @@ impl Runtime {
         let mut cmd = Command::new(&self.engine);
         cmd.arg("--model").arg(weights).arg("--mmproj").arg(projector)
             .args(["--host","127.0.0.1","--port","7679","--alias",model_id,
-                "-ngl","999","--ctx-size","16384","--parallel","1",
+                "--device","CUDA0","-ngl","999","--ctx-size","16384","--parallel","1",
                 "--api-key",&key,"--no-webui","--log-disable"])
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .kill_on_drop(true);
@@ -149,7 +149,10 @@ impl Runtime {
             if !matches!(child.try_wait(), Ok(None)) {
                 return Err(unavailable("CUDA inference engine exited during model load"));
             }
-            // Authenticated model listing proves we reached this worker, not another process.
+            // Wait for actual model readiness, then verify this is our authenticated worker.
+            let ready = self.client.get(format!("{WORKER}/health")).timeout(Duration::from_secs(2))
+                .send().await.map(|r| r.status().is_success()).unwrap_or(false);
+            if !ready { sleep(Duration::from_millis(250)).await; continue; }
             if let Ok(r) = self.client.get(format!("{WORKER}/v1/models"))
                 .bearer_auth(&key).timeout(Duration::from_secs(2)).send().await {
                 if r.status().is_success() {
@@ -224,6 +227,27 @@ fn validate_messages(body: &Value) -> bool {
         }
     })
 }
+#[derive(Deserialize)]
+struct RemoveRequest { id: String }
+
+async fn remove_model(State(s): State<Shared>, h: HeaderMap, Json(req): Json<RemoveRequest>) -> ApiResult {
+    authorize(&h, false)?;
+    if !safe_id(&req.id) { return Err(err(StatusCode::BAD_REQUEST, "Invalid model ID")); }
+    let mut s = s.lock().await;
+    s.reconcile().await;
+    if s.worker.as_ref().map(|w| w.model.as_str()) == Some(req.id.as_str()) {
+        return Err(err(StatusCode::CONFLICT, "Release the model and wait for active pages to finish first"));
+    }
+    let dir = s.root.join(&req.id);
+    if dir.exists() {
+        if !catalog(&s.root).iter().any(|m| m.id == req.id) {
+            return Err(err(StatusCode::NOT_FOUND, "Model not registered"));
+        }
+        fs::remove_dir_all(&dir).map_err(|_| unavailable("Unable to remove model files"))?;
+    }
+    Ok(Json(json!({"ok":true})))
+}
+
 async fn chat(State(s): State<Shared>, h: HeaderMap, Json(body): Json<Value>) -> ApiResult {
     authorize(&h, true)?;
     let model = body.get("model").and_then(Value::as_str)
@@ -272,6 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/local/models", get(models))
         .route("/local/lease", post(lease))
+        .route("/local/remove", post(remove_model))
         .route("/v1/chat/completions", post(chat))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(Arc::clone(&shared));

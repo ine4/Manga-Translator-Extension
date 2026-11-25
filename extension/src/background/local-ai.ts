@@ -17,7 +17,7 @@ export function effectiveRequest(body: TranslateRequest, settings: AppSettings):
     base_url: undefined, api_key: undefined, translation_mode: 'one-step', ocr_method: 'LLM',
   };
 }
-function hostname(url?: string): string | null {
+export function hostname(url?: string): string | null {
   try {
     const u = new URL(url ?? '');
     return u.protocol === 'https:' || u.protocol === 'http:' ? u.hostname.toLowerCase() : null;

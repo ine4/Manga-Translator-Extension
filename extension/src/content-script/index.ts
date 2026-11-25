@@ -815,6 +815,7 @@ function addTranslatedBadge(img: HTMLImageElement): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let translatedCache = new Map<string, string>(); // rawUrl -> base64 (no prefix)
+window.addEventListener('pagehide', () => { translatedCache.clear(); imageCache.clear(); });
 
 async function loadTranslatedCache(): Promise<void> {
   // Migration: remove legacy persisted image/URL entries without restoring them.

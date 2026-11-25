@@ -194,3 +194,15 @@ All error responses return `JSON` with a `detail` field:
 - **Output**: Always PNG (raw base64, no `data:` prefix)
 - **Max size**: Configurable via `MT_MAX_IMAGE_SIZE_MB` (default: 50MB)
 - **Timeout**: Configurable via `MT_REQUEST_TIMEOUT_SECONDS` (default: 300s)
+
+## Local AI controller
+
+The extension's local mode forces `POST http://127.0.0.1:7677/translate` with `provider: "Local"`, `model_name: "qwen3-vl-4b"`, and no user-supplied API key or base URL. Source `Auto` runs a local vision inference to determine language and reading direction. The Rust controller binds to 127.0.0.1:7678; its internal CUDA worker binds to port 7679 with an ephemeral key. No cloud fallback.
+
+Control routes (header `X-Manga-Local: 1`):
+
+- `GET /local/models`: registered models, installed flag, loaded model and lease count.
+- `POST /local/lease`: JSON `{ "id": "browser:<uuid>", "model": "qwen3-vl-4b", "keep": true }`. Use `keep: false` to release. Browser/GUI leases expire after 90 seconds without refresh; job leases expire after 30 minutes if abandoned. No hostnames or URLs are transmitted.
+- `POST /local/remove`: JSON `{ "id": "qwen3-vl-4b" }`. Rejects removal of a loaded model.
+
+No image persistence, even in temporary or debug files. The browser keeps rendered images only in the active document's memory. API errors never intentionally echo the image body. Loopback is the default backend bind; remote mode requires deliberate MT_HOST configuration. See [LOCAL_AI.md](LOCAL_AI.md).
