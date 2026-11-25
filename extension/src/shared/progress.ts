@@ -38,4 +38,3 @@ export async function readTranslationStream(response: Response, update: (progres
     reader.releaseLock();
   }
 }
-
