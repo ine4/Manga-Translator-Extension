@@ -3,7 +3,6 @@ import gc
 import os
 import random
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -483,7 +482,6 @@ def process_outside_text(
         )
 
         current_image = pil_image
-        temp_files = []
         none_skipped_clip_bboxes = set()
         try:
             if mask_groups:
@@ -1103,37 +1101,8 @@ def process_outside_text(
                         continue
 
                     flux_inpaints += 1
-                    # Save to disk if more regions remain to reduce memory usage
-                    if i < len(mask_groups) - 1:
-                        temp_file = None
-                        try:
-                            temp_fd, temp_file = tempfile.mkstemp(suffix=".png")
-                            os.close(temp_fd)
-                            inpainted_image.save(temp_file, format="PNG")
-                            temp_files.append(temp_file)
-
-                            with Image.open(temp_file) as img_tmp:
-                                img_tmp.load()
-                                current_image = img_tmp.copy()
-
-                            del inpainted_image
-                            gc.collect()
-                            log_message(
-                                "Saved intermediate inpainting result to disk",
-                                verbose=verbose,
-                            )
-                        except Exception as e:
-                            log_message(
-                                "Warning: Failed to save intermediate image to disk: "
-                                f"{e}. Continuing with in-memory processing.",
-                                verbose=verbose,
-                            )
-                            # Fallback to in-memory if disk save fails
-                            current_image = inpainted_image
-                            if temp_file and temp_file in temp_files:
-                                temp_files.remove(temp_file)
-                    else:
-                        current_image = inpainted_image
+                    # Keep the intermediate image in memory.
+                    current_image = inpainted_image
 
                 if grouped_flux_candidates:
                     grouped_mask = np.zeros((img_h, img_w), dtype=bool)
@@ -1198,12 +1167,8 @@ def process_outside_text(
                     always_print=True,
                 )
         finally:
-            for temp_file in temp_files:
-                if temp_file and os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception:
-                        pass
+            # No temporary image files are created.
+            pass
 
         outside_text_data = []
         original_cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)

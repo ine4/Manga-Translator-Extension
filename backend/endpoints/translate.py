@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
-from models.schemas import (
+from api_schemas import (
     TranslateBatchItem,
     TranslateBatchItemResponse,
     TranslateBatchRequest,
@@ -28,7 +28,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 def _build_bubble_info(bubbles: list[dict]) -> list:
     """Convert bubble dicts to BubbleInfo schema items."""
-    from models.schemas import BubbleInfo
+    from api_schemas import BubbleInfo
 
     results = []
     for b in bubbles:
@@ -83,7 +83,7 @@ async def translate_single(req: TranslateRequest) -> TranslateResponse:
     try:
         result_image, bubbles, elapsed = await asyncio.to_thread(translate_image_base64, req.image, config)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Translation failed: {e}")
+        raise HTTPException(status_code=503 if req.provider == "Local" else 500, detail="Local translation failed; check model installation and controller." if req.provider == "Local" else "Translation failed.") from e
 
     translated_b64 = image_to_base64_raw(result_image)
 
@@ -91,7 +91,7 @@ async def translate_single(req: TranslateRequest) -> TranslateResponse:
         translated_image=translated_b64,
         bubbles=_build_bubble_info(bubbles),
         processing_time_seconds=elapsed,
-        source_language=req.input_language,
+        source_language=config.translation.input_language,
         target_language=req.output_language,
         provider=req.provider,
     )
@@ -147,7 +147,7 @@ def _translate_single_item(
             id=item.id,
             translated_image=None,
             bubbles=[],
-            error=str(e),
+            error="Local translation failed; check model installation and controller." if req.provider == "Local" else "Translation failed.",
             processing_time_seconds=t.time() - item_start,
         )
 
@@ -211,6 +211,7 @@ async def list_providers():
             "Moonshot AI",
             "OpenRouter",
             "OpenAI-Compatible",
+            "Local",
         ],
         "default_provider": "Google",
     }

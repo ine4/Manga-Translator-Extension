@@ -797,7 +797,7 @@ def _parse_llm_response_unified(
             f"Parsing {provider} unified response: {len(response_text)} chars",
             verbose=debug,
         )
-        log_message(f"Raw response:\n---\n{response_text}\n---", always_print=True)
+        log_message("Translation response received", verbose=debug)
 
         # Pattern matches "1: text" or "1. text" or "1 text" etc.
         pattern = re.compile(
@@ -1031,7 +1031,7 @@ def _parse_rosetta_response(
     if response_text == "":
         raise TranslationError(f"{provider}: Empty response")
 
-    log_message(f"Raw response:\n---\n{response_text}\n---", always_print=True)
+    log_message("Translation response received", verbose=debug)
 
     # Strip markdown code fences if present
     cleaned = response_text.strip()

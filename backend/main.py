@@ -7,7 +7,9 @@ if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 
 import torch
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
@@ -29,6 +31,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request: Request, _exc: RequestValidationError):
+    # Pydantic's standard error body can echo the original base64 image.
+    return JSONResponse(status_code=422, content={"detail": "Invalid translation request."})
+
+
+@app.middleware("http")
+async def no_store(_request: Request, call_next):
+    response = await call_next(_request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 # Mount routes
 app.include_router(translate_router)
@@ -79,4 +94,5 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         reload=settings.reload,
+        access_log=False,
     )

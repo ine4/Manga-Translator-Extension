@@ -564,7 +564,7 @@ def _apply_pre_upscale_if_needed(
 
 
 def translate_and_render(
-    image_path: Union[str, Path],
+    image_path: Optional[Union[str, Path]],
     config: MangaTranslatorConfig,
     output_path: Optional[Union[str, Path]] = None,
     cancellation_manager: Optional["CancellationManager"] = None,
@@ -572,6 +572,7 @@ def translate_and_render(
     previous_context_texts: Optional[List[List[str]]] = None,
     previous_context_texts_provider: Optional[Callable[[], List[List[str]]]] = None,
     ocr_texts_out: Optional[List[str]] = None,
+    image_override: Optional[Image.Image] = None,
 ):
     """
     Main function to translate manga speech bubbles and render translations using a config object.
@@ -593,7 +594,10 @@ def translate_and_render(
         PIL.Image: Final translated image
     """
     start_time = time.time()
-    image_path = Path(image_path)
+    if image_override is not None and output_path is not None:
+        raise ValueError("In-memory API processing cannot write output files")
+    # A label only: all image readers receive the actual PIL object.
+    image_path = Path(image_path) if image_path is not None else Path("in-memory.png")
     verbose = config.verbose
     device = config.device
     previous_context_images = previous_context_images or []
@@ -606,8 +610,8 @@ def translate_and_render(
     get_model_manager().set_hf_token(hf_token)
 
     try:
-        pil_original = Image.open(image_path)
-        image_format = pil_original.format
+        pil_original = image_override if image_override is not None else Image.open(image_path)
+        image_format = pil_original.format or 'PNG'
         mime_type, cv2_ext = get_image_encoding_params(image_format)
         log_message(
             f"Original image format: {image_format} -> MIME: {mime_type}",
@@ -724,7 +728,7 @@ def translate_and_render(
 
     panels = None
     debug_panels = None
-    if config.detection.use_panel_sorting or ENABLE_COMPONENT_ORDER_DEBUG:
+    if config.detection.use_panel_sorting or (ENABLE_COMPONENT_ORDER_DEBUG and image_override is None):
         try:
             log_message(
                 "Detecting panels...",
@@ -732,6 +736,7 @@ def translate_and_render(
             )
             debug_panels = detect_panels(
                 image_path,
+                image_override=pil_original if image_override is not None else None,
                 confidence=config.detection.panel_confidence,
                 device=device,
                 verbose=verbose,
@@ -1042,7 +1047,7 @@ def translate_and_render(
 
                 panels = None
                 debug_panels = None
-                if ENABLE_COMPONENT_ORDER_DEBUG:
+                if ENABLE_COMPONENT_ORDER_DEBUG and image_override is None:
                     try:
                         log_message(
                             "Detecting panels for ordering debug...",
@@ -1050,6 +1055,7 @@ def translate_and_render(
                         )
                         debug_panels = detect_panels(
                             image_path,
+                image_override=pil_original if image_override is not None else None,
                             confidence=config.detection.panel_confidence,
                             device=config.device,
                             verbose=verbose,
@@ -1081,6 +1087,7 @@ def translate_and_render(
                         )
                         panels = detect_panels(
                             image_path,
+                image_override=pil_original if image_override is not None else None,
                             confidence=config.detection.panel_confidence,
                             device=config.device,
                             verbose=verbose,
@@ -1106,7 +1113,7 @@ def translate_and_render(
                 sorted_bubble_data = sort_bubbles_by_reading_order(
                     all_text_data, reading_direction, panels=panels
                 )
-                if ENABLE_COMPONENT_ORDER_DEBUG:
+                if ENABLE_COMPONENT_ORDER_DEBUG and image_override is None:
                     bubble_debug_masks = {}
                     for bubble in sorted_bubble_data:
                         if bubble.get("is_outside_text", False):
@@ -1239,6 +1246,8 @@ def translate_and_render(
                                 debug=verbose,
                             )
                         except TranslationError as e:
+                            if config.translation.local_managed:
+                                raise
                             error_str = str(e).lower()
                             critical_tokens = (
                                 "429",
@@ -1260,6 +1269,8 @@ def translate_and_render(
                                 bubble_images_b64
                             )
                         except Exception as e:
+                            if config.translation.local_managed:
+                                raise
                             log_message(
                                 f"Translation API error: {e}", always_print=True
                             )

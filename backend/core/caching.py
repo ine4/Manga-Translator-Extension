@@ -596,6 +596,7 @@ class UnifiedCache:
             self._manga_ocr_cache.cache.clear()
             self._upscale_cache.cache.clear()
             self._inpaint_cache.cache.clear()
+            self._current_image_hash = None
         log_message("All caches cleared", always_print=True)
 
     def set_current_image(self, image: Image.Image, verbose: bool = False) -> None:
