@@ -1,11 +1,12 @@
-import { DEFAULT_SETTINGS, type AppSettings } from '../shared/types.js';
+import { DEFAULT_SETTINGS, TARGET_LANGUAGES, type AppSettings } from '../shared/types.js';
 import type { TranslateRequest, TranslateResponse } from '../shared/types.js';
 import { normalizeUiLanguage } from '../shared/i18n.js';
 import { readTranslationStream, type TranslationProgress } from '../shared/progress.js';
 
-import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender, setSiteAuto } from './local-ai.js';
+import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender, setSiteAuto, chapterLanguage, setChapterLanguage } from './local-ai.js';
 
 const STORAGE_KEY = 'manga_translator_settings';
+let imagePreparations = 0;
 installLocalLifecycle(getSettings, async (tabId, enabled) => {
   try {
     if (enabled) await ensureContentScript(tabId);
@@ -25,6 +26,47 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
+    if (message.type === 'PREPARE_IMAGE') {
+      if (_sender.id !== chrome.runtime.id || !_sender.tab || imagePreparations >= 2) { sendResponse({}); return; }
+      imagePreparations++;
+      try {
+        const url = new URL(String(message.url));
+        if (!['http:','https:'].includes(url.protocol)) throw new Error('Unsupported image URL');
+        const response = await fetch(url.href, {cache:'no-store',credentials:'include',signal:AbortSignal.timeout(6000)});
+        if (!response.ok || !response.body) throw new Error('Image unavailable');
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[]=[];
+        let size=0;
+        try {
+          while (true) {
+            const {value,done}=await reader.read();if(done)break;
+            size+=value.byteLength;
+            if(size>6*1024*1024){await reader.cancel();throw new Error('Image too large for prefetch');}
+            chunks.push(value);
+          }
+        } finally {reader.releaseLock();}
+        const parts:string[]=[];
+        for(const chunk of chunks)for(let i=0;i<chunk.length;i+=32768)parts.push(String.fromCharCode(...chunk.subarray(i,i+32768)));
+        sendResponse({base64:btoa(parts.join(''))});
+      } catch {sendResponse({});}
+      finally {imagePreparations--;}
+      return;
+    }
+    if (message.type === 'CHAPTER_LANGUAGE') {
+      try {
+        const popup = localControlSender(_sender, chrome.runtime.id);
+        if (!popup && !(_sender.id === chrome.runtime.id && _sender.tab?.id !== undefined && ['get','unlock'].includes(message.action))) throw new Error('Use the extension chapter controls');
+        const tab = popup ? (await chrome.tabs.query({ active: true, currentWindow: true }))[0] : _sender.tab;
+        if (tab?.id === undefined) throw new Error('Open a reader tab first');
+        if (message.action === 'lock') {
+          if (!(TARGET_LANGUAGES as readonly string[]).includes(message.language)) throw new Error('Choose a supported chapter language');
+          await setChapterLanguage(tab.id, message.language);
+        } else if (message.action === 'unlock') await setChapterLanguage(tab.id, null);
+        else if (message.action !== 'get') throw new Error('Unknown chapter control');
+        sendResponse({ language: await chapterLanguage(tab.id, tab.url) });
+      } catch (error) { sendResponse({ error: error instanceof Error ? error.message : 'Chapter language unavailable' }); }
+      return;
+    }
     if (message.type === 'SET_SITE_AUTO') {
       try {
         const popup = localControlSender(_sender, chrome.runtime.id);
@@ -132,7 +174,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'TRANSLATE_IMAGE') {
       const { imageUrl, pageUrl } = message as { type: string; imageUrl: string; pageUrl?: string };
       try {
-        const result = await fetchAndTranslate(imageUrl, pageUrl);
+        const result = await fetchAndTranslate(imageUrl, pageUrl, _sender.tab);
         sendResponse(result);
       } catch (error) {
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
@@ -158,7 +200,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (_sender.tab?.id !== undefined && typeof message.requestId === 'string') {
             void chrome.tabs.sendMessage(_sender.tab.id, { type: 'TRANSLATION_PROGRESS', requestId: message.requestId, progress }).catch(() => {});
           }
-        });
+        }, _sender.tab);
         sendResponse(result);
       } catch (error) {
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
@@ -210,7 +252,7 @@ async function fetchModelList(baseUrl: string, apiKey: string): Promise<string[]
 // Fetch image + translate via backend (runs in background — no CORS)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | undefined, body: TranslateRequest, update: (progress: TranslationProgress) => void): Promise<TranslateResult> {
+async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | undefined, body: TranslateRequest, update: (progress: TranslationProgress) => void, tab?: chrome.tabs.Tab): Promise<TranslateResult> {
   // Image is already fetched and base64-encoded by content script (with page cookies/auth).
   // Background only calls the backend API — no image fetching here.
   void imageUrl; void pageUrl;
@@ -223,7 +265,7 @@ async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | und
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(effectiveRequest(body, settings)),
+      body: JSON.stringify(await readingRequest(body, settings, tab)),
       cache: 'no-store',
       redirect: 'error',
     });
@@ -255,7 +297,13 @@ interface TranslateResult {
   error?: string;
 }
 
-async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined): Promise<TranslateResult> {
+async function readingRequest(body: TranslateRequest, settings: AppSettings, tab?: chrome.tabs.Tab): Promise<TranslateRequest> {
+  const request = effectiveRequest(body, settings);
+  const language = tab?.id === undefined ? null : await chapterLanguage(tab.id, tab.url);
+  return language ? { ...request, input_language: language } : request;
+}
+
+async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined, tab?: chrome.tabs.Tab): Promise<TranslateResult> {
   const referer = pageUrl ? pageUrl.split('/').slice(0, 3).join('/') : '';
   // 1. Fetch image
   let base64: string | null = null;
@@ -312,7 +360,7 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(effectiveRequest(body, settings)),
+      body: JSON.stringify(await readingRequest(body, settings, tab)),
       cache: 'no-store',
       redirect: 'error',
     });

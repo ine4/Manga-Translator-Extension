@@ -74,6 +74,16 @@ The last two are examples: choose the actual GGUF filenames from the repository 
 
 A model is registered in local-ai/models/<id>/model.json. The manifest contains id, label, repo, revision, weights, projector; the model and projector reside beside it. The default catalog remains visible as not installed if the model is removed. To change the shipped default, edit default-model.json, update the default ID in backend/local_ai.py and extension/src/shared/types.ts, then rebuild and qualify.
 
+## Reading performance
+
+The Translate tab offers Custom (existing settings), Fast (bubble crops only, 2× rendering) and Full context (page context plus crops, 4× rendering). Fast keeps Auto source-language detection. Surrounding dialogue/art can improve accuracy, and 2× text may look less smooth; use Full context when needed. These presets affect Local AI only and preserve independent cloud settings.
+
+Auto-translate prepares the next two queued images while the current page translates. The document retains at most two prepared strings totaling 16 MiB (conservative UTF-16 accounting), separate from the current request, decoded browser images and transient fetch/canvas buffers. Network prefetch accepts at most 6 MiB per image, at most two background fetches, with six-second timeouts. Images above four million pixels skip speculative canvas preparation. Preparation is best effort; large/failed images use the normal foreground path. Stop and pagehide abort/discard the document buffer; a background fallback already underway may finish within its timeout and is discarded. Detector/render work remains in the existing pipeline, and GPU inference remains serial. This overlaps image acquisition/encoding, not whole-page GPU translation.
+
+In Config, select a language and choose Lock chapter language. This skips the separate language-identification vision call for this tab. The lock survives paths/reloads on the same hostname until explicitly unlocked; it cannot reliably infer chapter boundaries. Unlock when changing chapters/titles/languages. Other tabs do not inherit it. Closing the tab, leaving the host or restarting the browser clears it. The reader HUD displays the lock and provides Unlock language. Locks and hostnames exist only in storage.session, never in persistent settings or controller payloads.
+
+The Rust controller reads `local-ai/engine.json` at the next worker start. Defaults retain Flash Attention `auto`, batch 2048, microbatch 512 and no extra image-token cap. Only these validated settings are accepted, not arbitrary engine arguments. Invalid files fail explicitly. For the tested optional lower visual budget, copy the values from `engine-fast.example.json`; release all pins and wait for in-flight jobs before reloading. Lowering the budget can lose small lettering. Flash Attention already selects automatically, so adding `on` alone is not a demonstrated speedup. See [official engine options](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) and [measured qualification](LOCAL_AI_QUALIFICATION.md).
+
 ## Privacy requirements (not optional)
 
 - Do not persist original pages, translated pages, base64 images, crops, inpainting/upscale intermediates, debug renders, prompts containing images, or website history.

@@ -1,0 +1,6 @@
+{
+  "flash_attention": "auto",
+  "batch_size": 2048,
+  "ubatch_size": 512,
+  "image_max_tokens": null
+}

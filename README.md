@@ -124,6 +124,8 @@ Original pages, translated pages, crops, and debug images are processed in memor
 
 See [Local AI setup and Codex qualification](docs/LOCAL_AI.md) for requirements, model management, privacy behavior and tests.
 
+For faster reading, select **Fast — crops only, 2× rendering** on the Translate tab. **Full context — 4× rendering** keeps surrounding dialogue/art available to the model; **Custom** keeps your existing settings. Fast retains Auto language detection, with less context and potentially softer rendered text. Auto prepares up to two upcoming images in document RAM while keeping translation inference serial. In **Config**, explicitly lock a chapter language to skip repeated language identification. The lock belongs to this tab until you unlock it or leave the hostname; unlock it when switching titles/languages. It is never remembered as a website language preference.
+
 ## Quick Start
 
 1. Download the source or clone the repository.

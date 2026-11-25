@@ -5,6 +5,42 @@ import { DEFAULT_SETTINGS } from '../src/shared/types.ts';
 import { usableImageUrl } from '../src/shared/image-url.ts';
 import { readTranslationStream } from '../src/shared/progress.ts';
 import { progressLabel } from '../src/shared/progress-label.ts';
+import { ImagePrefetch } from '../src/shared/prefetch.ts';
+
+test('Fast and full-context presets stay local and leave cloud requests unchanged', () => {
+  const body={input_language:'Auto',send_full_page_context:true,supersampling_factor:4};
+  const fast=effectiveRequest(body as any,{...DEFAULT_SETTINGS,localReadingMode:'fast'});
+  assert.equal(fast.send_full_page_context,false); assert.equal(fast.supersampling_factor,2);
+  const quality=effectiveRequest(body as any,{...DEFAULT_SETTINGS,localReadingMode:'context'});
+  assert.equal(quality.send_full_page_context,true); assert.equal(quality.supersampling_factor,4);
+  const cloud=effectiveRequest(body as any,{...DEFAULT_SETTINGS,localReadingMode:'fast',localAiEnabled:false});
+  assert.equal(cloud.send_full_page_context,true);assert.equal(cloud.supersampling_factor,4);
+});
+
+test('prefetch is count/byte bounded, consumed once, and clears late results on stop', async () => {
+  const cache=new ImagePrefetch(2,12);
+  let finish!: (data:string)=>void;
+  let signal: AbortSignal | undefined;
+  cache.warm('one',async()=> '1234');
+  cache.warm('two',s=>{signal=s;return new Promise(resolve=>{finish=resolve;});});
+  let third=false;cache.warm('three',async()=>{third=true;return '1';});
+  assert.equal(third,false);
+  assert.equal(await cache.take('one'),'1234');
+  assert.equal(await cache.take('one'),null);
+  cache.clear();assert.equal(signal?.aborted,true);finish('12');
+  await Promise.resolve();await Promise.resolve();
+  assert.deepEqual(cache.stats,{items:0,bytes:0});
+  cache.warm('oversized',async()=> '1234567');
+  assert.equal(await cache.take('oversized'),null);
+  assert.deepEqual(cache.stats,{items:0,bytes:0});
+});
+
+test('chapter lock is per tab, survives same-host paths, and clears on departure', () => {
+  const pins={id:'browser:test',hosts:[],windows:[],chapterLocks:{'7':{host:'reader.example',language:'Japanese'}}};
+  assert.equal(prunePins(pins,[{id:7,url:'https://reader.example/next',windowId:1}],true).chapterLocks?.['7']?.language,'Japanese');
+  assert.deepEqual(prunePins(pins,[{id:8,url:'https://reader.example/next',windowId:1}],true).chapterLocks,{});
+  assert.deepEqual(prunePins(pins,[{id:7,url:'https://other.example/',windowId:1}],true).chapterLocks,{});
+});
 
 test('site Auto intent survives paths and other tabs but expires when its final host tab leaves', () => {
   const pins = {id:'browser:test',hosts:[],windows:[],autoHosts:['reader.example']};

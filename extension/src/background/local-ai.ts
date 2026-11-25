@@ -5,7 +5,8 @@ const ROOT = 'http://127.0.0.1:7678';
 const SESSION = 'manga_local_session';
 const ALARM = 'manga-local-reconcile';
 const SETTINGS = 'manga_translator_settings';
-export type Pins = { id: string; hosts: string[]; windows: number[]; autoHosts?: string[] };
+export type ChapterLock = { host: string; language: string };
+export type Pins = { id: string; hosts: string[]; windows: number[]; autoHosts?: string[]; chapterLocks?: Record<string, ChapterLock> };
 
 export function localControlSender(sender: {id?: string; url?: string}, extensionId: string): boolean {
   return sender.id === extensionId && sender.url === `chrome-extension://${extensionId}/popup/index.html`;
@@ -19,7 +20,8 @@ export function effectiveRequest(body: TranslateRequest, settings: AppSettings):
   return {
     ...body, provider: 'Local', model_name: settings.localModel,
     base_url: undefined, api_key: undefined, translation_mode: 'one-step', ocr_method: 'LLM',
-    send_full_page_context: settings.localFullPageContext ?? false,
+    send_full_page_context: settings.localReadingMode === 'fast' ? false : settings.localReadingMode === 'context' ? true : (settings.localFullPageContext ?? false),
+    supersampling_factor: settings.localReadingMode === 'fast' ? 2 : settings.localReadingMode === 'context' ? 4 : body.supersampling_factor,
   };
 }
 export function hostname(url?: string): string | null {
@@ -58,7 +60,7 @@ function ordered<T>(op: () => Promise<T>): Promise<T> {
   tail = next.catch(() => undefined);
   return next;
 }
-export function prunePins(pins: Pins, tabs: Array<{url?: string; windowId: number}>, enabled: boolean): Pins {
+export function prunePins(pins: Pins, tabs: Array<{id?: number; url?: string; windowId: number}>, enabled: boolean): Pins {
   const hosts = new Set(tabs.map(tab => hostname(tab.url)).filter(Boolean));
   const windows = new Set(tabs.map(tab => tab.windowId));
   return {
@@ -66,6 +68,7 @@ export function prunePins(pins: Pins, tabs: Array<{url?: string; windowId: numbe
     hosts: enabled ? pins.hosts.filter(host => hosts.has(host)) : [],
     windows: enabled ? pins.windows.filter(windowId => windows.has(windowId)) : [],
     autoHosts: (pins.autoHosts ?? []).filter(host => hosts.has(host)),
+    chapterLocks: Object.fromEntries(Object.entries(pins.chapterLocks ?? {}).filter(([id, lock]) => tabs.some(tab => String(tab.id) === id && hostname(tab.url) === lock.host))),
   };
 }
 
@@ -101,7 +104,7 @@ export function installLocalLifecycle(getSettings: () => Promise<AppSettings>, s
   const refresh = () => {
     void ordered(async () => {
       const pins = await getPins();
-      if (pins.hosts.length || pins.windows.length || pins.autoHosts?.length) {
+      if (pins.hosts.length || pins.windows.length || pins.autoHosts?.length || Object.keys(pins.chapterLocks ?? {}).length) {
         const tabs = await chrome.tabs.query({});
         await reconcile(await getSettings(), pins, tabs);
         for (const tab of tabs) {
@@ -123,6 +126,25 @@ export function installLocalLifecycle(getSettings: () => Promise<AppSettings>, s
     if (before?.localAiEnabled !== after?.localAiEnabled || before?.localModel !== after?.localModel) refresh();
   });
   chrome.runtime.onStartup.addListener(() => { void purgeLegacyImages(); refresh(); });
+}
+
+export async function chapterLanguage(tabId: number, url?: string): Promise<string | null> {
+  const lock = (await getPins()).chapterLocks?.[String(tabId)];
+  return lock && lock.host === hostname(url) ? lock.language : null;
+}
+
+export async function setChapterLanguage(tabId: number, language: string | null): Promise<void> {
+  await ordered(async () => {
+    const tab = await chrome.tabs.get(tabId);
+    const host = hostname(tab.url);
+    if (!host) throw new Error('Open a normal reader page first');
+    const pins = await getPins();
+    pins.chapterLocks ??= {};
+    if (language) pins.chapterLocks[String(tabId)] = { host, language };
+    else delete pins.chapterLocks[String(tabId)];
+    await savePins(pins);
+    await chrome.tabs.sendMessage(tabId, { type: 'CHAPTER_LANGUAGE_CHANGED', language }).catch(() => {});
+  });
 }
 
 /** Host comes from Chrome's tab record, never from a website-supplied message. */

@@ -110,6 +110,7 @@ export interface AppSettings {
   localAiEnabled: boolean;
   localModel: string;
   localFullPageContext?: boolean;
+  localReadingMode?: 'custom' | 'fast' | 'context';
   autoDetect: boolean;
   showBubbleBboxes: boolean;
   uiLanguage: UiLanguage;
@@ -121,6 +122,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   localAiEnabled: true,
   localModel: 'qwen3-vl-4b',
   localFullPageContext: false,
+  localReadingMode: 'custom',
   autoDetect: false,
   showBubbleBboxes: false,
   uiLanguage: 'en',
