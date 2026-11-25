@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hostname, prunePins, effectiveBackend, effectiveRequest } from '../src/background/local-ai.ts';
+import { hostname, prunePins, effectiveBackend, effectiveRequest, localControlSender } from '../src/background/local-ai.ts';
 import { DEFAULT_SETTINGS } from '../src/shared/types.ts';
+
+test('local controls accept only the extension-owned popup document', () => {
+  assert.equal(localControlSender({id:'self',url:'chrome-extension://self/popup/index.html'},'self'),true);
+  for (const sender of [{id:'self',url:'https://reader.example/'},{id:'other',url:'chrome-extension://self/popup/index.html'},{id:'self'},{id:'self',url:'chrome-extension://self/popup/index.html.evil'}]) {
+    assert.equal(localControlSender(sender,'self'),false);
+  }
+});
 
 test('site match is exact hostname, independent of path', () => {
   assert.equal(hostname('https://reader.example/a/chapter?q=secret'), 'reader.example');

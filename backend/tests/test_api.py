@@ -58,6 +58,13 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["results"][1]["translated_image"])
         self.assertEqual(body["results"][1]["error"], "Translation failed.")
 
+    def test_bubble_metadata_wire_fields(self):
+        self.mock_pipeline.return_value = (self.image, [
+            {"bbox": [1, 2, 10, 15], "confidence": 0.9, "translation": "Synthetic"}], 0.01)
+        response = self.client.post("/translate", json={"image": "synthetic"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["bubbles"][0]["translated_text"], "Synthetic")
+
     def test_rejects_path_output_before_running_pipeline(self):
         for route, body in [("/translate", {"image": "synthetic"}),
                             ("/translate/batch", {"images": []})]:

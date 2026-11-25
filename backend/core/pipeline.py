@@ -476,6 +476,7 @@ def translate_and_render(
     previous_context_texts_provider: Optional[Callable[[], List[List[str]]]] = None,
     ocr_texts_out: Optional[List[str]] = None,
     image_override: Optional[Image.Image] = None,
+    bubble_results_out: Optional[List[Dict[str, Any]]] = None,
 ):
     """
     Main function to translate manga speech bubbles and render translations using a config object.
@@ -492,6 +493,7 @@ def translate_and_render(
         ocr_texts_out: Optional mutable list. When provided, the current page's OCR transcripts
             (in reading order) are appended so the orchestrator can chain them as previous-page
             text context for subsequent pages.
+        bubble_results_out: Optional request-memory list of valid bubble boxes and translations.
 
     Returns:
         PIL.Image: Final translated image
@@ -1246,6 +1248,12 @@ def translate_and_render(
                             continue
 
                         # Use OSB-specific settings for outside text, regular settings for speech bubbles
+                        if bubble_results_out is not None:
+                            bubble_results_out.append({
+                                "bbox": [int(v) for v in bbox],
+                                "confidence": float(bubble.get("confidence", 0.0)),
+                                "translation": text,
+                            })
                         if is_outside_text:
                             log_message(
                                 f"Rendering outside text {bbox}: '{text[:30]}...'",

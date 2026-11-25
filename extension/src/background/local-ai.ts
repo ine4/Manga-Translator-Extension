@@ -7,6 +7,10 @@ const ALARM = 'manga-local-reconcile';
 const SETTINGS = 'manga_translator_settings';
 export type Pins = { id: string; hosts: string[]; windows: number[] };
 
+export function localControlSender(sender: {id?: string; url?: string}, extensionId: string): boolean {
+  return sender.id === extensionId && sender.url === `chrome-extension://${extensionId}/popup/index.html`;
+}
+
 export function effectiveBackend(settings: AppSettings): string {
   return settings.localAiEnabled ? 'http://127.0.0.1:7677' : settings.backendUrl;
 }

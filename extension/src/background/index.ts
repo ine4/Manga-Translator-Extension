@@ -2,7 +2,7 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../shared/types.js';
 import type { TranslateRequest, TranslateResponse } from '../shared/types.js';
 import { normalizeUiLanguage } from '../shared/i18n.js';
 
-import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages } from './local-ai.js';
+import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender } from './local-ai.js';
 
 const STORAGE_KEY = 'manga_translator_settings';
 installLocalLifecycle(getSettings);
@@ -21,7 +21,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
     if (typeof message.type === 'string' && message.type.startsWith('LOCAL_')) {
       try {
-        if (_sender.tab) throw new Error('Local model controls are available from the extension popup only');
+        if (!localControlSender(_sender, chrome.runtime.id)) throw new Error('Local model controls are available from the extension popup only');
         sendResponse(await handleLocalMessage(message, await getSettings()));
       } catch (error) {
         sendResponse({ error: error instanceof Error ? error.message : 'Local controller unavailable' });

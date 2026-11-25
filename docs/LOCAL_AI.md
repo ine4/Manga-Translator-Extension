@@ -1,8 +1,8 @@
 # Local AI — Windows setup and Codex handoff
 
-This draft introduces a local-first translator while preserving the existing BYO-cloud workflow. It is **not yet qualified on Windows/CUDA or in Chrome**. Do not merge before the acceptance tests below pass.
+This change introduces a local-first translator while preserving the existing BYO-cloud workflow. The default model has been qualified on the Windows/CUDA workstation and Chrome build recorded below; other environments still need qualification.
 
-See [Windows qualification, 25 November 2026](LOCAL_AI_QUALIFICATION.md) for actual results and hashes. The stricter live translation smoke fails; keep the PR in draft and do not merge.
+See [Windows qualification, 25 November 2026](LOCAL_AI_QUALIFICATION.md) for actual results and hashes. The production vision smoke, Chrome lifecycle checks and GUI checks pass. The owner explicitly waived the elevated Process Monitor capture; this is not reported as a passing capture.
 
 ## Installation
 
@@ -88,4 +88,4 @@ Then run setup, start the stack, close all existing pins and execute `local-ai/t
 7. Test Windows PowerShell 5.1 GUI and startup with spaces in paths, CUDA device selection, correct pinned release flags and model/projector compatibility. Check the Rust worker readiness, bounded timeouts and kill behavior. Ensure the GUI remains usable during downloads. Capture only timings/errors/status, no screenshots or real page content in reports.
 8. Test cloud regression using mocked provider requests (or an explicitly opted-in provider). Keep local default and BYO settings independent. Validate all existing API single/batch response formats. The previous source tree imported missing models.schemas from an ignored weights directory; this PR adds tracked api_schemas.py.
 
-Fix compilation, test failures and model-specific prompt/context tuning in this PR. Generate and commit Cargo.lock after validating the dependency graph, record the actual qualification results and hashes, then mark ready for review. Do not merge automatically.
+Fix compilation, test failures and model-specific prompt/context tuning in this PR. Generate and commit Cargo.lock after validating the dependency graph, record the actual qualification results and hashes, then mark ready for review. Merge only after the required checks pass and the repository owner authorizes it.

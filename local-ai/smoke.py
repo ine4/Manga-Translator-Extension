@@ -2,10 +2,17 @@
 import base64
 import io
 import json
+from pathlib import Path
+import sys
 import time
 import uuid
 import urllib.request
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "backend"))
+from core.config import TranslationConfig
+from core.services.translation import call_translation_api_batch
 
 ROOT = "http://127.0.0.1:7678"
 MODEL = "qwen3-vl-4b"
@@ -25,26 +32,30 @@ def main():
     if not any(m["id"]==MODEL and m["installed"] for m in before["models"]):
         raise RuntimeError("Install the default model first")
     lease = "gui:" + str(uuid.uuid4())
-    image = Image.new("RGB",(480,160),"white")
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((10,10,470,150),outline="black",width=3)
-    draw.text((150,70),"HELLO WORLD",fill="black")
-    buf = io.BytesIO()
-    image.save(buf,format="PNG")
-    data = "data:image/png;base64,"+base64.b64encode(buf.getvalue()).decode()
+    config = TranslationConfig(provider="OpenAI-Compatible", local_managed=True,
+        model_name=MODEL, input_language="English", output_language="Spanish",
+        openai_compatible_url=ROOT + "/v1", openai_compatible_api_key="manga-local",
+        translation_mode="one-step", send_full_page_context=False, temperature=0)
+    font = ImageFont.truetype(str(REPO / "backend/fonts/Roboto/Roboto-Regular.ttf"), 32)
     try:
         start = time.perf_counter()
         request("/local/lease",{"id":lease,"model":MODEL,"keep":True})
         print(f"Initial model load: {time.perf_counter()-start:.3f}s")
-        for i in range(2):
+        for i, (source, expected) in enumerate([
+            ("HELLO WORLD", ("hola", "mundo")), ("THANK YOU", ("gracias",)),
+        ]):
+            image = Image.new("RGB", (480,160), "white")
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((10,10,470,150), outline="black", width=3)
+            draw.text((100,60), source, font=font, fill="black")
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            data = base64.b64encode(buf.getvalue()).decode("ascii")
             start=time.perf_counter()
-            result=request("/v1/chat/completions",{"model":MODEL,"temperature":0,"max_tokens":80,
-                "messages":[{"role":"system","content":"You are a translator. Translate the text in the user's image into Spanish. Return only the Spanish translation."},
-                {"role":"user","content":[{"type":"image_url","image_url":{"url":data}},
-                {"type":"text","text":"Read the English text in the image and translate it into Spanish."}]}]})
-            answer=result["choices"][0]["message"]["content"]
-            print(f"Warm inference {i+1}: {time.perf_counter()-start:.3f}s; synthetic answer: {answer[:120]}")
-            assert "hola" in answer.casefold() and "mundo" in answer.casefold(), "Synthetic Spanish translation was incorrect"
+            result = call_translation_api_batch(config, [data], "", ["image/png"],
+                "image/png", [{"is_outside_text":False}])
+            assert len(result) == 1 and all(word in result[0].casefold() for word in expected), "Production vision translation was incorrect"
+            print(f"Warm production vision request {i+1}: {time.perf_counter()-start:.3f}s; translation PASS")
     finally:
         request("/local/lease",{"id":lease,"keep":False})
     after = request("/local/models")

@@ -397,6 +397,7 @@ def translate_image_base64(
         try:
             with base64_to_image(image_b64) as pil_image:
                 pil_image.load()
+                bubbles: list[dict[str, Any]] = []
                 managed = config.translation.local_managed
                 lease = page_lease(config.translation.model_name) if managed else nullcontext()
                 with lease:
@@ -407,11 +408,12 @@ def translate_image_base64(
                     result = translate_and_render(
                         image_path=None, config=config, output_path=None,
                         image_override=pil_image,
+                        bubble_results_out=bubbles,
                     )
                     if not isinstance(result, Image.Image):
                         raise RuntimeError("Translation did not return an image")
                     translated_image = result.copy()
-            return translated_image, [], time.monotonic() - start
+            return translated_image, bubbles, time.monotonic() - start
         finally:
             # Global pipeline caches are request-scoped for the HTTP API.
             get_cache().clear_all()
