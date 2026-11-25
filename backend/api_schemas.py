@@ -1,8 +1,9 @@
 """Wire types live outside ignored model-weight directories."""
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class TranslationOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     input_language: str = "Japanese"
     output_language: str = "English"
     provider: str = "Google"

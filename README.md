@@ -96,7 +96,7 @@ Recommended release assets:
 | Asset | Purpose |
 | --- | --- |
 | `manga-translator-extension-dist-*.zip` | Built browser extension. Load the extracted `dist/` folder in Chrome/Edge. |
-| `manga-translator-models-no-flux-*.zip` | Backend model files without Flux. Extract into the project root so it restores `backend/models/`. |
+| `manga-translator-models-no-flux-*.zip` | Backend model files without Flux. The v1.0.1 archive contains `models/`; extract into `backend/` to restore `backend/models/`. |
 | `manga-translator-runtime-*.tar.gz.part01`, `part02`, ... | Split backend Python runtime. Recombine before extracting. |
 
 Recombine split runtime parts on Windows PowerShell:
@@ -111,7 +111,7 @@ tar -xzf .\manga-translator-runtime-v1.0.1.tar.gz
 Extract models:
 
 ```powershell
-Expand-Archive .\manga-translator-models-no-flux-v1.0.1.zip -DestinationPath .
+Expand-Archive .\manga-translator-models-no-flux-v1.0.1.zip -DestinationPath .\backend
 ```
 
 ## Local AI (offline translation)

@@ -2,9 +2,9 @@ param([string]$PythonExe = "python", [switch]$Live)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 function CheckExit($what) { if($LASTEXITCODE -ne 0){throw "$what failed (exit $LASTEXITCODE)"} }
-& cargo test --manifest-path (Join-Path $PSScriptRoot 'Cargo.toml')
+& cargo test --locked --manifest-path (Join-Path $PSScriptRoot 'Cargo.toml')
 CheckExit 'Rust lease/catalog tests'
-& $PythonExe -m compileall -q (Join-Path $root 'backend') (Join-Path $PSScriptRoot 'model_manager.py')
+& $PythonExe -m compileall -q -x '[/\\](runtime|models|target|\.venv|venv|node_modules)[/\\]' (Join-Path $root 'backend') $PSScriptRoot
 CheckExit 'Python compile'
 & $PythonExe -m unittest discover -s (Join-Path $root 'backend\tests')
 CheckExit 'Python integration tests'

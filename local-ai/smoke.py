@@ -39,11 +39,12 @@ def main():
         for i in range(2):
             start=time.perf_counter()
             result=request("/v1/chat/completions",{"model":MODEL,"temperature":0,"max_tokens":80,
-                "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":data}},
+                "messages":[{"role":"system","content":"You are a translator. Translate the text in the user's image into Spanish. Return only the Spanish translation."},
+                {"role":"user","content":[{"type":"image_url","image_url":{"url":data}},
                 {"type":"text","text":"Read the English text in the image and translate it into Spanish."}]}]})
             answer=result["choices"][0]["message"]["content"]
-            assert answer.strip(), "Empty inference result"
             print(f"Warm inference {i+1}: {time.perf_counter()-start:.3f}s; synthetic answer: {answer[:120]}")
+            assert "hola" in answer.casefold() and "mundo" in answer.casefold(), "Synthetic Spanish translation was incorrect"
     finally:
         request("/local/lease",{"id":lease,"keep":False})
     after = request("/local/models")

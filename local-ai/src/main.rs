@@ -15,6 +15,9 @@ use std::{
 use tokio::{process::{Child, Command}, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
+#[cfg(windows)]
+mod windows_job;
+
 const DEFAULT: &str = include_str!("../default-model.json");
 const WORKER: &str = "http://127.0.0.1:7679";
 const BROWSER_TTL: Duration = Duration::from_secs(90);
@@ -282,6 +285,9 @@ async fn chat(State(s): State<Shared>, h: HeaderMap, Json(body): Json<Value>) ->
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Children inherit this job, so forced controller termination also releases CUDA.
+    #[cfg(windows)]
+    let _worker_job = windows_job::WorkerJob::new()?;
     let root = PathBuf::from(env::var("MANGA_LOCAL_MODELS").unwrap_or_else(|_| "local-ai/models".into()));
     let engine = PathBuf::from(env::var("MANGA_LLAMA_SERVER").unwrap_or_else(|_| "local-ai/runtime/llama-server.exe".into()));
     let shared = Arc::new(Mutex::new(Runtime { root, engine, worker:None, leases:Leases::default(),

@@ -10,7 +10,7 @@ $assets = [ordered]@{
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     throw "Install Rust stable (MSVC toolchain) and Visual Studio C++ Build Tools, then rerun setup."
 }
-& cargo build --release --manifest-path (Join-Path $PSScriptRoot 'Cargo.toml')
+& cargo build --release --locked --manifest-path (Join-Path $PSScriptRoot 'Cargo.toml')
 if ($LASTEXITCODE -ne 0) { throw "Rust controller build failed" }
 $runtime = Join-Path $PSScriptRoot 'runtime'
 if (-not (Test-Path (Join-Path $runtime 'llama-server.exe'))) {
@@ -21,7 +21,8 @@ if (-not (Test-Path (Join-Path $runtime 'llama-server.exe'))) {
         foreach ($asset in $assets.Keys) {
             $zip = Join-Path $stage $asset
             Write-Host "Downloading official $asset"
-            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$asset" -OutFile $zip
+            & curl.exe --fail --location --retry 2 --connect-timeout 30 --max-time 900 --output $zip "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$asset"
+            if ($LASTEXITCODE -ne 0) { throw "Download failed: $asset" }
             if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $assets[$asset]) {
                 throw "Hash mismatch: $asset"
             }
@@ -34,6 +35,9 @@ if (-not (Test-Path (Join-Path $runtime 'llama-server.exe'))) {
         Copy-Item (Join-Path $exe.Directory.FullName '*') -Destination $runtime -Recurse -Force
         Get-ChildItem (Join-Path $stage 'unpacked-2') -Recurse -Filter '*.dll' | Copy-Item -Destination $runtime -Force
     } finally {
+        if (-not ([IO.Path]::GetFullPath($stage)).StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Installation staging path is outside the temporary directory'
+        }
         Remove-Item -LiteralPath $stage -Recurse -Force
     }
 }

@@ -1517,6 +1517,7 @@ function normalizeSettings(raw?: Partial<AppSettings>): AppSettings {
   return {
     ...getDefaultSettings(),
     ...(raw ?? {}),
+    localAiEnabled: raw ? (raw.localAiEnabled ?? false) : true,
     uiLanguage: normalizeUiLanguage(raw?.uiLanguage),
     config: {
       ...getDefaultSettings().config,
@@ -1528,11 +1529,13 @@ function normalizeSettings(raw?: Partial<AppSettings>): AppSettings {
 function getDefaultSettings(): AppSettings {
   return {
     backendUrl: DEFAULT_BACKEND_URL,
+    localAiEnabled: true,
+    localModel: 'qwen3-vl-4b',
     autoDetect: false,
     showBubbleBboxes: false,
     uiLanguage: 'en',
     config: {
-      inputLanguage: 'Japanese',
+      inputLanguage: 'Auto',
       outputLanguage: 'English',
       provider: 'Google',
       temperature: 0.1,

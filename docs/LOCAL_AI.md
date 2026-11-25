@@ -2,6 +2,8 @@
 
 This draft introduces a local-first translator while preserving the existing BYO-cloud workflow. It is **not yet qualified on Windows/CUDA or in Chrome**. Do not merge before the acceptance tests below pass.
 
+See [Windows qualification, 25 November 2026](LOCAL_AI_QUALIFICATION.md) for actual results and hashes. The stricter live translation smoke fails; keep the PR in draft and do not merge.
+
 ## Installation
 
 1. Install current NVIDIA drivers, Rust stable MSVC toolchain ([rustup](https://rustup.rs/)), Visual Studio C++ Build Tools, Python/runtime and Node 22+. Restore the existing backend detection models and font assets described in the README.
