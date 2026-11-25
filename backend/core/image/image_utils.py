@@ -1,7 +1,6 @@
 import gc
 import io
 import os
-import tempfile
 from pathlib import Path
 from typing import Tuple
 
@@ -56,119 +55,9 @@ def cv2_to_pil(cv2_image):
     return Image.fromarray(cv2_image)
 
 
-def save_image_with_compression(
-    image, output_path, jpeg_quality=95, png_compression=2, verbose=False
-):
-    """
-    Save an image with specified compression settings.
-
-    Args:
-        image (PIL.Image): Image to save
-        output_path (str or Path): Path to save the image
-        jpeg_quality (int): JPEG quality (1-100, higher is better quality)
-        png_compression (int): PNG compression level (0-6, higher is more compression)
-        verbose (bool): Whether to print verbose logging
-
-    Raises:
-        ImageProcessingError: If image saving fails
-    """
-    output_path = (
-        Path(output_path) if not isinstance(output_path, Path) else output_path
-    )
-
-    extension = output_path.suffix.lower()
-    output_format = None
-    save_options = {}
-
-    if extension in [".jpg", ".jpeg"]:
-        output_format = "JPEG"
-        # JPEG doesn't support transparency - composite on white background
-        if image.mode in ["RGBA", "LA"]:
-            log_message(
-                f"Converting {image.mode} to RGB for JPEG output", verbose=verbose
-            )
-            background = Image.new("RGB", image.size, (255, 255, 255))
-            alpha_channel = image.split()[-1] if image.mode in ["RGBA", "LA"] else None
-            background.paste(image, mask=alpha_channel)
-            image = background
-        elif image.mode == "P":  # Handle Palette mode
-            log_message("Converting P mode to RGB for JPEG output", verbose=verbose)
-            image = image.convert("RGB")
-        elif image.mode != "RGB":
-            log_message(
-                f"Converting {image.mode} mode to RGB for JPEG output", verbose=verbose
-            )
-            image = image.convert("RGB")
-        save_options["quality"] = max(1, min(jpeg_quality, 100))
-        log_message(
-            f"Saving JPEG image with quality {save_options['quality']} to {output_path}",
-            verbose=verbose,
-        )
-
-    elif extension == ".png":
-        output_format = "PNG"
-        oxipng_level = min(6, max(0, int(png_compression)))
-        log_message(
-            f"Saving PNG image with compression level {oxipng_level} to {output_path}",
-            verbose=verbose,
-        )
-
-    elif extension == ".webp":
-        output_format = "WEBP"
-        save_options["lossless"] = True
-        log_message(
-            f"Saving WEBP image with lossless quality to {output_path}", verbose=verbose
-        )
-
-    else:
-        log_message(
-            f"Warning: Unknown output extension '{extension}'. Saving as PNG.",
-            verbose=verbose,
-            always_print=True,
-        )
-        output_format = "PNG"
-        output_path = output_path.with_suffix(".png")
-        oxipng_level = min(6, max(0, int(png_compression)))
-        log_message(
-            f"Saving PNG image with compression level {oxipng_level} to {output_path}",
-            verbose=verbose,
-        )
-
-    try:
-        os.makedirs(output_path.parent, exist_ok=True)
-
-        if output_format == "PNG":
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            png_data = buffer.getvalue()
-
-            try:
-                optimized_data = oxipng.optimize_from_memory(
-                    png_data, level=oxipng_level, optimize_alpha=True
-                )
-                with open(output_path, "wb") as f:
-                    f.write(optimized_data)
-            except oxipng.PngError as e:
-                log_message(
-                    f"oxipng optimization failed: {e}. Falling back to Pillow save.",
-                    verbose=verbose,
-                    always_print=True,
-                )
-                # Fallback to Pillow if oxipng fails
-                image.save(
-                    str(output_path),
-                    format="PNG",
-                    compress_level=max(0, min(png_compression, 6)),
-                    optimize=True,
-                )
-        else:
-            # Use Pillow for non-PNG formats
-            image.save(str(output_path), format=output_format, **save_options)
-        return True
-    except Exception as e:
-        log_message(f"Error saving image to {output_path}: {e}", always_print=True)
-        raise ImageProcessingError(f"Failed to save image to {output_path}") from e
-
+def save_image_with_compression(*args, **kwargs):
+    """Intentional privacy restriction: translated image output is RAM-only."""
+    raise ImageProcessingError("Image file output is disabled in this fork")
 
 def calculate_centroid_expansion_box(
     cleaned_mask: np.ndarray, padding_pixels: float = 5.0, verbose: bool = False
@@ -426,37 +315,6 @@ def upscale_image_to_dimension(
     current_image = _upscale_image(model, current_image, device)
     log_message(f"...to {current_image.width}x{current_image.height}", verbose=verbose)
 
-    # Save intermediate image to disk if more passes will be needed
-    if not met(current_image.width, current_image.height):
-        temp_file = None
-        try:
-            temp_fd, temp_file = tempfile.mkstemp(suffix=".png")
-            os.close(temp_fd)
-            current_image.save(temp_file, format="PNG")
-
-            with Image.open(temp_file) as img_tmp:
-                img_tmp.load()
-                new_image = img_tmp.copy()
-
-            del current_image
-            gc.collect()
-            current_image = new_image
-            log_message(
-                "Saved and reloaded intermediate image before additional passes",
-                verbose=verbose,
-            )
-        except Exception as e:
-            log_message(
-                f"Warning: Failed to save intermediate image to disk: {e}. Continuing with in-memory processing.",
-                verbose=verbose,
-            )
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
-
     while not met(current_image.width, current_image.height):
         log_message(
             f"Upscaling from {current_image.width}x{current_image.height} (additional pass)...",
@@ -466,35 +324,6 @@ def upscale_image_to_dimension(
         log_message(
             f"...to {current_image.width}x{current_image.height}", verbose=verbose
         )
-
-        # Save intermediate image to disk to free memory
-        temp_file = None
-        try:
-            temp_fd, temp_file = tempfile.mkstemp(suffix=".png")
-            os.close(temp_fd)
-            current_image.save(temp_file, format="PNG")
-            del current_image
-            gc.collect()
-
-            with Image.open(temp_file) as img_tmp:
-                img_tmp.load()
-                current_image = img_tmp.copy()
-
-            log_message(
-                "Saved and reloaded intermediate image to free memory",
-                verbose=verbose,
-            )
-        except Exception as e:
-            log_message(
-                f"Warning: Failed to save intermediate image to disk: {e}. Continuing with in-memory processing.",
-                verbose=verbose,
-            )
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass  # Ignore errors during cleanup
 
     cache.set_upscaled_image(cache_key, current_image, verbose)
     return current_image

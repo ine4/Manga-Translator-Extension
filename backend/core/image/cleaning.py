@@ -1,7 +1,6 @@
 import gc
 import os
 import random
-import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
@@ -747,7 +746,7 @@ def clean_speech_bubbles(
                     if flux_seed == -1
                     else max(0, int(flux_seed))
                 )
-                temp_files = []
+
                 try:
                     if inpaint_method == "flux_klein_9b":
                         inpainter = FluxKleinInpainter(
@@ -812,31 +811,6 @@ def clean_speech_bubbles(
                             )
                             continue
 
-                        # Save intermediate result to disk to free memory when multiple regions
-                        if idx < len(colored_bubbles) - 1:
-                            temp_file = None
-                            try:
-                                temp_fd, temp_file = tempfile.mkstemp(suffix=".png")
-                                os.close(temp_fd)
-                                pil_working.save(temp_file, format="PNG")
-                                log_message(
-                                    "Saved intermediate inpainting result to disk",
-                                    verbose=verbose,
-                                )
-                                temp_files.append(temp_file)
-                                with Image.open(temp_file) as img_tmp:
-                                    img_tmp.load()
-                                    pil_working = img_tmp.copy()
-                                gc.collect()
-                            except Exception as e:
-                                log_message(
-                                    f"Warning: Failed to save intermediate inpainting result: {e}",
-                                    verbose=verbose,
-                                )
-                                if temp_file and temp_file in temp_files:
-                                    temp_files.remove(temp_file)
-                                # fall through with in-memory image
-
                     cleaned_image = cv2.cvtColor(
                         np.array(pil_working.convert("RGB")), cv2.COLOR_RGB2BGR
                     )
@@ -846,12 +820,7 @@ def clean_speech_bubbles(
                         always_print=True,
                     )
                 finally:
-                    for temp_file in temp_files:
-                        if temp_file and os.path.exists(temp_file):
-                            try:
-                                os.remove(temp_file)
-                            except Exception:
-                                pass
+                    pass  # Images are never written to disk.
             elif colored_bubbles:
                 log_message(
                     "Colored bubbles detected but Flux inpainting skipped "

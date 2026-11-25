@@ -81,7 +81,7 @@ def call_openai_compatible_endpoint(
                 }
             )
         else:
-            log_message(f"Invalid image part format: {part}", always_print=True)
+            log_message("Invalid image part format", always_print=True)
     user_content.append({"type": "text", "text": text_part["text"]})
     messages.append({"role": "user", "content": user_content})
 
@@ -113,9 +113,18 @@ def call_openai_compatible_endpoint(
                 verbose=debug,
             )
 
-            response = requests.post(
-                url, headers=headers, json=payload, timeout=timeout
-            )
+            if base_url.rstrip("/") == "http://127.0.0.1:7678/v1":
+                # Avoid environment proxies and redirects for private page data.
+                with requests.Session() as session:
+                    session.trust_env = False
+                    response = session.post(url, headers=headers, json=payload,
+                                            timeout=timeout, allow_redirects=False)
+                    if response.is_redirect:
+                        raise TranslationError("Local endpoint returned a redirect")
+            else:
+                response = requests.post(
+                    url, headers=headers, json=payload, timeout=timeout
+                )
             response.raise_for_status()
 
             log_message(f"Processing response from {url}", verbose=debug)
@@ -160,7 +169,7 @@ def call_openai_compatible_endpoint(
 
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code
-            error_text = e.response.text[:500]
+            error_text = "Local inference error" if base_url.rstrip('/') == 'http://127.0.0.1:7678/v1' else e.response.text[:500]
 
             if status_code == 429 and attempt < max_retries:
                 log_message(

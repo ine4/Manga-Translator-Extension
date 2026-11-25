@@ -10,6 +10,7 @@ import base64
 import io
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,6 +36,9 @@ from core.config import (
 
 from core.ml.model_manager import get_model_manager
 from utils.logging import log_message
+from local_ai import LOCAL_BASE_URL, LOCAL_MODEL, page_lease, detect_page_language
+
+_page_lock = threading.Lock()
 
 # Cached device — determined once at module load, reused for all requests
 _CACHED_DEVICE: torch.device | None = None
@@ -168,6 +172,15 @@ def _build_config(
 ) -> MangaTranslatorConfig:
     """Build a MangaTranslatorConfig from request parameters."""
 
+    local_managed = provider == "Local"
+    if local_managed:
+        # Never use a user-configured remote endpoint, key or cloud fallback.
+        provider = "OpenAI-Compatible"
+        base_url = LOCAL_BASE_URL
+        api_key = "manga-local"
+        model_name = model_name or LOCAL_MODEL
+        translation_mode = "one-step"
+        ocr_method = "LLM"
     normalized_base_url = _normalize_openai_compatible_base_url(base_url)
     if provider == "OpenAI-Compatible":
         if not normalized_base_url:
@@ -200,6 +213,7 @@ def _build_config(
 
     translation = TranslationConfig(
         provider=provider,
+        local_managed=local_managed,
         model_name=model_name or _get_default_model(provider),
         temperature=temperature,
         top_p=top_p,
@@ -207,7 +221,7 @@ def _build_config(
         max_tokens=max_tokens,
         input_language=input_language,
         output_language=output_language,
-        reading_direction="rtl",
+        reading_direction="ltr" if local_managed and input_language not in ("Japanese", "Auto") else "rtl",
         translation_mode=translation_mode,
         reasoning_effort=reasoning_effort,
         special_instructions=special_instructions,
@@ -373,68 +387,33 @@ def translate_image_base64(
     image_b64: str,
     config: MangaTranslatorConfig,
 ) -> tuple[Image.Image, list[dict[str, Any]], float]:
-    """Translate a base64-encoded image using MangaTranslator pipeline.
+    """Process the entire API page in RAM; never create a page or crop file."""
+    from contextlib import nullcontext
+    from core.caching import get_cache
+    from core.pipeline import translate_and_render
 
-    Args:
-        image_b64: Raw base64 image string (no data URL prefix)
-        config: MangaTranslatorConfig with all settings
-
-    Returns:
-        Tuple of (translated PIL Image, bubble info list, processing time in seconds)
-    """
-    start = time.time()
-
-    # Decode image
-    pil_image = base64_to_image(image_b64)
-
-    # Create a temporary file path for the pipeline (it expects a path)
-    tmp_input = io.BytesIO()
-    pil_image.save(tmp_input, format="PNG")
-    tmp_input.seek(0)
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
-        tmp_in.write(tmp_input.read())
-        tmp_in_path = Path(tmp_in.name)
-
-    tmp_output = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    tmp_output_path = Path(tmp_output.name)
-
-    bubbles_info: list[dict[str, Any]] = []
-    translated_image: Image.Image = pil_image
-
-    try:
-        # Import pipeline late to avoid circular imports at module level
-        from core.pipeline import translate_and_render
-
-        result = translate_and_render(
-            image_path=tmp_in_path,
-            config=config,
-            output_path=tmp_output_path,
-        )
-
-        if isinstance(result, Image.Image):
-            translated_image = result
-        else:
-            translated_image = pil_image  # fallback
-
-        # Note: bubble_info (OCR+translation text) is returned through
-        # the ocr_texts_out mechanism in translate_and_render, but since
-        # we don't need per-bubble text here we skip capturing it.
-        # If needed, pass ocr_texts_out=[] to capture.
-
-    except Exception as e:
-        log_message(f"Translation pipeline error: {e}", always_print=True)
-        raise RuntimeError(str(e)) from e
-    finally:
-        # Cleanup temp files
+    start = time.monotonic()
+    with _page_lock:
         try:
-            tmp_in_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        try:
-            tmp_output_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    elapsed = time.time() - start
-    return translated_image, bubbles_info, elapsed
+            with base64_to_image(image_b64) as pil_image:
+                pil_image.load()
+                bubbles: list[dict[str, Any]] = []
+                managed = config.translation.local_managed
+                lease = page_lease(config.translation.model_name) if managed else nullcontext()
+                with lease:
+                    if managed and config.translation.input_language == "Auto":
+                        language, direction = detect_page_language(pil_image, config.translation.model_name)
+                        config.translation.input_language = language
+                        config.translation.reading_direction = direction
+                    result = translate_and_render(
+                        image_path=None, config=config, output_path=None,
+                        image_override=pil_image,
+                        bubble_results_out=bubbles,
+                    )
+                    if not isinstance(result, Image.Image):
+                        raise RuntimeError("Translation did not return an image")
+                    translated_image = result.copy()
+            return translated_image, bubbles, time.monotonic() - start
+        finally:
+            # Global pipeline caches are request-scoped for the HTTP API.
+            get_cache().clear_all()

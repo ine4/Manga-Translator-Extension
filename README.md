@@ -42,7 +42,7 @@
 
 MangaTranslator Extension is a portable browser-extension stack for translating manga and comic pages. The browser extension scans images on the current page, sends them to a local backend, and replaces or previews the translated result. The backend runs locally, so the browser does not need to send manga images through a third-party extension server.
 
-The extension uses the LLM, API key, model, and Base URL that you provide. You can connect it to Google, OpenAI, Anthropic, OpenRouter, DeepSeek, xAI, Z.ai, Moonshot AI, or any OpenAI-compatible endpoint, then keep the translation workflow inside the browser.
+The extension supports a built-in local model manager or the LLM, API key, model, and Base URL that you provide. You can connect it to Google, OpenAI, Anthropic, OpenRouter, DeepSeek, xAI, Z.ai, Moonshot AI, or any OpenAI-compatible endpoint, then keep the translation workflow inside the browser.
 
 The default package is intentionally lighter: it includes the normal backend runtime and non-Flux models, while Flux Klein 4B is optional and can be installed later with `setup.bat`.
 
@@ -96,7 +96,7 @@ Recommended release assets:
 | Asset | Purpose |
 | --- | --- |
 | `manga-translator-extension-dist-*.zip` | Built browser extension. Load the extracted `dist/` folder in Chrome/Edge. |
-| `manga-translator-models-no-flux-*.zip` | Backend model files without Flux. Extract into the project root so it restores `backend/models/`. |
+| `manga-translator-models-no-flux-*.zip` | Backend model files without Flux. The v1.0.1 archive contains `models/`; extract into `backend/` to restore `backend/models/`. |
 | `manga-translator-runtime-*.tar.gz.part01`, `part02`, ... | Split backend Python runtime. Recombine before extracting. |
 
 Recombine split runtime parts on Windows PowerShell:
@@ -111,8 +111,18 @@ tar -xzf .\manga-translator-runtime-v1.0.1.tar.gz
 Extract models:
 
 ```powershell
-Expand-Archive .\manga-translator-models-no-flux-v1.0.1.zip -DestinationPath .
+Expand-Archive .\manga-translator-models-no-flux-v1.0.1.zip -DestinationPath .\backend
 ```
+
+## Local AI (offline translation)
+
+New installs default to Local AI with automatic source-language detection; existing installations retain their chosen cloud settings. Run `setup-local-ai.bat` once on Windows to install the CUDA inference engine, build the Rust controller, and download Qwen3-VL-4B-Instruct. Then launch `start-backend.bat` and choose the **Local AI** tab in the extension.
+
+The translator model is loaded only when a page is being translated or when you explicitly pin it to a website or browser window. When the final matching tab/window closes and no page is running, the model is unloaded. Website pins are not persisted. The **Local AI** tab does not require a URL or API key. Open `start-local-model-manager.bat` to manage models from Hugging Face, view residency, or pin the model for the manager session.
+
+Original pages, translated pages, crops, and debug images are processed in memory. This fork disables all image file output and purges old extension image-cache entries. External cloud providers remain opt-in; their retention policies are outside this application’s control.
+
+See [Local AI setup and Codex qualification](docs/LOCAL_AI.md) for requirements, model management, privacy behavior and tests.
 
 ## Quick Start
 
@@ -155,12 +165,13 @@ Enable Developer mode, choose Load unpacked, and select `extension/dist/`.
 
 ## Configuration
 
-Open the extension popup and use the three tabs:
+Open the extension popup and use its four tabs:
 
 | Tab | Options |
 | --- | --- |
 | `Translate` | Source language, target language, outside-bubble text toggle. |
 | `LLM Config` | Provider, Base URL, model, API key, temperature, Top P, Top K, full-page context, special instructions. |
+| `Local AI` | Enable local AI, select installed model, pin to current website/window, release pins. |
 | `Config` | Extension UI language and backend URL. |
 
 Default backend URL:

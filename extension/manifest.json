@@ -14,7 +14,8 @@
     "activeTab",
     "storage",
     "scripting",
-    "unlimitedStorage"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -33,8 +34,14 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["assets/*", "content-script/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "assets/*",
+        "content-script/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
-  ]
+  ],
+  "minimum_chrome_version": "120"
 }

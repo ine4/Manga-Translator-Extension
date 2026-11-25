@@ -1401,7 +1401,7 @@ def detect_speech_bubbles(
                 verbose=verbose,
             )
 
-    if len(primary_boxes) == 0:
+    if len(primary_boxes) == 0 and not conjoined_detection:
         log_message("No detections found", verbose=verbose)
         return detections, text_free_boxes
 

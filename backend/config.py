@@ -7,7 +7,7 @@ import os
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 7677
     reload: bool = False
 
@@ -27,8 +27,6 @@ class Settings(BaseSettings):
         "http://localhost:7677",
         "http://127.0.0.1",
         "http://127.0.0.1:7677",
-        "http://192.168.1.231",
-        "http://192.168.1.231:7677",
     ]
 
     class Config:

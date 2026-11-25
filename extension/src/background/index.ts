@@ -2,9 +2,13 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../shared/types.js';
 import type { TranslateRequest, TranslateResponse } from '../shared/types.js';
 import { normalizeUiLanguage } from '../shared/i18n.js';
 
+import { handleLocalMessage, installLocalLifecycle, effectiveRequest, effectiveBackend, purgeLegacyImages, localControlSender } from './local-ai.js';
+
 const STORAGE_KEY = 'manga_translator_settings';
+installLocalLifecycle(getSettings);
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await purgeLegacyImages();
   const current = await chrome.storage.local.get(STORAGE_KEY);
   if (!current[STORAGE_KEY]) {
     await chrome.storage.local.set({ [STORAGE_KEY]: DEFAULT_SETTINGS });
@@ -15,6 +19,15 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
+    if (typeof message.type === 'string' && message.type.startsWith('LOCAL_')) {
+      try {
+        if (!localControlSender(_sender, chrome.runtime.id)) throw new Error('Local model controls are available from the extension popup only');
+        sendResponse(await handleLocalMessage(message, await getSettings()));
+      } catch (error) {
+        sendResponse({ error: error instanceof Error ? error.message : 'Local controller unavailable' });
+      }
+      return;
+    }
     if (message.type === 'GET_SETTINGS') {
       sendResponse({ settings: await getSettings() });
       return;
@@ -28,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === 'CHECK_HEALTH') {
       const settings = await getSettings();
-      sendResponse(await checkHealth(settings.backendUrl));
+      sendResponse(await checkHealth(effectiveBackend(settings)));
       return;
     }
 
@@ -53,9 +66,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const url = message.url as string;
       const pageUrl: string = message.pageUrl as string || '';
       const referer = pageUrl ? pageUrl.split('/').slice(0, 3).join('/') : '';
-      console.log('[BG] FETCH_IMAGE url:', url, 'referer:', referer);
       try {
         const res = await fetch(url, {
+        cache: 'no-store',
           headers: {
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
@@ -63,10 +76,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
         });
-        console.log('[BG] FETCH_IMAGE response status:', res.status, res.statusText);
         if (!res.ok) {
-          console.log('[BG] FETCH_IMAGE failed with', res.status, 'for url:', url);
-          sendResponse({ error: `Image fetch failed: HTTP ${res.status} for ${url}` });
+          sendResponse({ error: `Image fetch failed: HTTP ${res.status}` });
           return;
         }
         const blob = await res.blob();
@@ -77,13 +88,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ base64 });
         };
         reader.onerror = () => {
-          console.log('[BG] FETCH_IMAGE FileReader error');
           sendResponse({ error: 'FileReader failed' });
         };
         reader.readAsDataURL(blob);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log('[BG] FETCH_IMAGE exception:', msg);
         sendResponse({ error: `Fetch exception: ${msg}` });
       }
       return;
@@ -102,13 +111,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === 'TRANSLATE_IMAGE') {
       const { imageUrl, pageUrl } = message as { type: string; imageUrl: string; pageUrl?: string };
-      console.log('[BG] TRANSLATE_IMAGE:', imageUrl, 'pageUrl:', pageUrl);
       try {
         const result = await fetchAndTranslate(imageUrl, pageUrl);
-        console.log('[BG] fetchAndTranslate result:', result);
         sendResponse(result);
       } catch (error) {
-        console.log('[BG] fetchAndTranslate error:', error);
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
       }
       return;
@@ -116,13 +122,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === 'LIST_MODELS') {
       const { baseUrl, apiKey } = message as { type: string; baseUrl: string; apiKey: string };
-      console.log('[BG] LIST_MODELS:', baseUrl);
       try {
         const models = await fetchModelList(baseUrl, apiKey);
-        console.log('[BG] LIST_MODELS result:', models.length, 'models');
         sendResponse({ models });
       } catch (error) {
-        console.log('[BG] LIST_MODELS error:', error);
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
       }
       return;
@@ -130,13 +133,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === 'TRANSLATE_IMAGE_WITH_BODY') {
       const { imageUrl, pageUrl, body } = message as { type: string; imageUrl: string; pageUrl?: string; body: TranslateRequest };
-      console.log('[BG] TRANSLATE_IMAGE_WITH_BODY:', imageUrl, 'pageUrl:', pageUrl);
       try {
         const result = await fetchAndTranslateWithBody(imageUrl, pageUrl, body);
-        console.log('[BG] fetchAndTranslateWithBody result:', result);
         sendResponse(result);
       } catch (error) {
-        console.log('[BG] fetchAndTranslateWithBody error:', error);
         sendResponse({ error: error instanceof Error ? error.message : String(error) });
       }
       return;
@@ -192,17 +192,17 @@ async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | und
   void imageUrl; void pageUrl;
 
   const settings = await getSettings();
-  const backendUrl = settings.backendUrl || 'http://localhost:7677';
+  const backendUrl = effectiveBackend(settings);
   const endpoint = `${backendUrl.replace(/\/$/, '')}/translate`;
 
   try {
-    console.log('[BG] fetchAndTranslateWithBody calling backend:', endpoint);
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(effectiveRequest(body, settings)),
+      cache: 'no-store',
+      redirect: 'error',
     });
-    console.log('[BG] fetchAndTranslateWithBody backend status:', res.status, res.statusText);
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
@@ -213,7 +213,6 @@ async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | und
       return { error: `Translate failed: ${detail}` };
     }
     const data = (await res.json()) as TranslateResponse;
-    console.log('[BG] fetchAndTranslateWithBody success');
     return {
       translated_image: data.translated_image,
       bubbles: data.bubbles,
@@ -221,7 +220,6 @@ async function fetchAndTranslateWithBody(imageUrl: string, pageUrl: string | und
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.log('[BG] fetchAndTranslateWithBody backend exception:', msg);
     return { error: `Translate error: ${msg}` };
   }
 }
@@ -235,11 +233,11 @@ interface TranslateResult {
 
 async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined): Promise<TranslateResult> {
   const referer = pageUrl ? pageUrl.split('/').slice(0, 3).join('/') : '';
-  console.log('[BG] fetchAndTranslate url:', imageUrl, 'referer:', referer);
   // 1. Fetch image
   let base64: string | null = null;
   try {
     const res = await fetch(imageUrl, {
+        cache: 'no-store',
       headers: {
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -247,8 +245,7 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
     });
-    console.log('[BG] fetchAndTranslate image status:', res.status, res.statusText);
-    if (!res.ok) return { error: `Image fetch failed: HTTP ${res.status} for ${imageUrl}` };
+    if (!res.ok) return { error: `Image fetch failed: HTTP ${res.status}` };
     const blob = await res.blob();
     base64 = await new Promise<string>((resolve, reject) => {
       const fr = new FileReader();
@@ -258,13 +255,12 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.log('[BG] fetchAndTranslate image exception:', msg);
     return { error: `Image fetch error: ${msg}` };
   }
 
   // 2. Translate
   const settings = await getSettings();
-  const backendUrl = settings.backendUrl || 'http://localhost:7677';
+  const backendUrl = effectiveBackend(settings);
   const endpoint = `${backendUrl.replace(/\/$/, '')}/translate`;
 
   const body: TranslateRequest = {
@@ -289,11 +285,12 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
   };
 
   try {
-    console.log('[BG] fetchAndTranslate calling backend:', endpoint);
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(effectiveRequest(body, settings)),
+      cache: 'no-store',
+      redirect: 'error',
     });
 
     if (!res.ok) {
@@ -303,12 +300,10 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
         if (typeof errBody['detail'] === 'string') detail = errBody['detail'];
         else detail = JSON.stringify(errBody).slice(0, 200);
       } catch { /* ignore */ }
-      console.log('[BG] fetchAndTranslate backend error:', detail);
       return { error: `Translate failed: ${detail}` };
     }
 
     const data = (await res.json()) as TranslateResponse;
-    console.log('[BG] fetchAndTranslate success');
     return {
       translated_image: data.translated_image,
       bubbles: data.bubbles,
@@ -316,7 +311,6 @@ async function fetchAndTranslate(imageUrl: string, pageUrl: string | undefined):
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.log('[BG] fetchAndTranslate backend exception:', msg);
     return { error: `Translate error: ${msg}` };
   }
 }
@@ -334,6 +328,7 @@ interface ChapterInfo {
 
 async function fetchChapterHTML(url: string): Promise<ChapterInfo> {
   const res = await fetch(url, {
+        cache: 'no-store',
     headers: {
       'Accept': 'text/html,application/xhtml+xml',
       'Accept-Language': 'en-US,en;q=0.9',
@@ -468,6 +463,7 @@ function normalizeSettings(raw?: Partial<AppSettings>): AppSettings {
   return {
     ...DEFAULT_SETTINGS,
     ...(raw ?? {}),
+    localAiEnabled: raw ? (raw.localAiEnabled ?? false) : DEFAULT_SETTINGS.localAiEnabled,
     uiLanguage: normalizeUiLanguage(raw?.uiLanguage),
     config: {
       ...DEFAULT_SETTINGS.config,
