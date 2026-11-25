@@ -1,4 +1,5 @@
 import type { AppSettings, TranslateRequest } from '../shared/types.js';
+import { usableImageUrl } from '../shared/image-url.js';
 
 const ROOT_ID  = 'mt-scanner-root';
 const STYLE_ID = 'mt-scanner-style';
@@ -363,7 +364,7 @@ function isNearViewport(el: Element): boolean {
 }
 
 function isUsableImageUrl(url: string | null | undefined): url is string {
-  return !!url && url !== window.location.href && !url.startsWith('blob:') && !url.startsWith('data:');
+  return usableImageUrl(url, window.location.href, document.contentType);
 }
 
 function firstSrcsetUrl(value: string): string | null {
